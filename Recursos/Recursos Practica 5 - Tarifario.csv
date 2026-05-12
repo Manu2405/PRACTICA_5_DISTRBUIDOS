@@ -1,0 +1,11 @@
+.,.,Fijo (12 m3/mes),.,.,.,.,.,.,.,.
+.,.,m3/mes,$us/mes,13-25,26-50,51-75,76-100,101-150,>151,.
+Residencial,R1,16.74,1.40,1.10,1.26,1.87,2.39,2.84,3.34,"Terrenos baldíos, casas abandonadas, viviendas en litigio"
+.,R2,33.37,2.78,1.78,1.98,2.96,3.59,4.16,4.75,Viviendas de una o dos habitaciones con una sola toma de agua
+.,R3,62.57,5.21,2.17,3.38,3.76,4.36,4.96,5.54,Viviendas de una sola planta funcionales y viviendas en construcción
+.,R4,104.22,8.69,2.58,2.80,4.39,4.99,5.59,6.20,Viviendas de dos o más pisos con todas las dependencias
+Comercial,C,125.16,10.43,5.35,5.73,6.14,6.53,6.92,7.34,.
+Comercial Especial,CE,145.98,12.17,8.72,8.72,9.12,9.50,9.90,10.29,.
+Industrial,I,112.64,9.39,4.95,5.66,5.94,6.33,6.73,7.11,.
+Preferencial,P,54.96,4.58,2.17,2.39,2.96,3.35,3.76,4.16,"Preferencial: predios con fines sociales, como establecimientos educativos estatales, hospitales, asilos, iglesias, conventos, centros de beneficencia, hogares del Estado"
+Social,S,91.72,7.64,3.57,3.77,3.96,4.35,4.75,5.15,"Predios de carácter público, edificios del Estado, parques y jardines, salones comunales, hidrantes"

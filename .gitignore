@@ -1,0 +1,37 @@
+# Dependencias
+node_modules/
+
+# Backend
+backend/node_modules/
+backend/recibos/
+
+# Backend Go
+backend-go/*.exe
+backend-go/tmp/
+backend-go/recibos/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Scripts
+scripts-data/node_modules/
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env
+.env
+.env.local
+.env.production
+
+# Cassandra data
+cassandra/data/
