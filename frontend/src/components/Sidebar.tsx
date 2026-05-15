@@ -1,8 +1,9 @@
 import { NavLink } from 'react-router-dom';
-import { BarChart3, DollarSign, Settings, FileText, Droplets, Database } from 'lucide-react';
+import { BarChart3, DollarSign, Settings, FileText, Droplets, Database, Building2 } from 'lucide-react';
 
 const links = [
-  { to: '/operacional', label: 'Operacional', icon: <BarChart3 size={18} /> },
+  { to: '/operacional', label: 'Dashboard SEMAPA', icon: <BarChart3 size={18} /> },
+  { to: '/alcaldia', label: 'Alcaldía', icon: <Building2 size={18} /> },
   { to: '/contabilidad', label: 'Contabilidad', icon: <DollarSign size={18} /> },
   { to: '/administracion', label: 'Administración', icon: <Settings size={18} /> },
   { to: '/factura', label: 'Facturación', icon: <FileText size={18} /> },

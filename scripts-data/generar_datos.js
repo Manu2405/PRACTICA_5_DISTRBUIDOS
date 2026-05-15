@@ -100,7 +100,7 @@ async function main() {
   let pCnt = 0, cCnt = 0, iCnt = 0, mCnt = 0;
 
   for (const zona of zonaDistrib) {
-    const distrito = String(zona.id_distrito);
+    const distrito = zona.distrito;
     const zonaN = zona.zona;
     const gwName = zona.gateway;
     const tarifaTotal = Object.values(zona.tarifaDist).reduce((s,v) => s+v, 0) || 1;

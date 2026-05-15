@@ -22,8 +22,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: semapa-backend
-    ports:
-      - "8080:8080"
+    network_mode: host
+    environment:
+      - CASSANDRA_HOST=localhost
     depends_on:
       cassandra:
         condition: service_healthy
@@ -38,6 +39,17 @@ services:
     container_name: semapa-frontend
     ports:
       - "5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  visor:
+    build:
+      context: ./visor
+      dockerfile: Dockerfile
+    container_name: semapa-visor
+    ports:
+      - "5174:5174"
     depends_on:
       - backend
     restart: unless-stopped

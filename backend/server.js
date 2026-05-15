@@ -6,7 +6,7 @@ import { enviarEmail, generarMensajeTexto } from './email.js';
 import { registrarConsultas } from './consultas.js';
 
 const app = express();
-app.use(cors({ origin: ['http://localhost:5173','http://localhost:3000'], credentials: true }));
+app.use(cors({ origin: ['http://localhost:5173','http://localhost:5174','http://localhost:3000'], credentials: true }));
 app.use(express.json());
 app.use('/recibos', express.static('./recibos'));
 
@@ -207,6 +207,136 @@ app.post('/api/notificacion/simular', async (req, res) => {
     const response = { estado: formato === 'email' && emailResult && !emailResult.error ? 'enviado' : 'simulado', formato, mensaje: msg };
     if (emailResult) response.email = emailResult;
     res.json(response);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// VISOR DE PAGOS — Búsqueda unificada por contrato o serie de medidor
+app.get('/api/visor/buscar', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const p = periodo(req.query);
+  if (!q) return res.status(400).json({ error: 'Falta parámetro q' });
+  try {
+    let contrato = null;
+
+    // Buscar por número de contrato (ej: CONT-01-123456)
+    const ctRows = (await db.execute('SELECT * FROM contratos_por_numero WHERE numero_contrato = ?', [q], { prepare: true })).rows;
+    if (ctRows.length > 0) {
+      contrato = ctRows[0];
+    } else {
+      // Buscar por serie de medidor
+      const medRows = (await db.execute('SELECT numero_contrato FROM medidores_por_serie WHERE numero_serie = ?', [q], { prepare: true })).rows;
+      if (medRows.length > 0) {
+        const ctByMed = (await db.execute('SELECT * FROM contratos_por_numero WHERE numero_contrato = ?', [medRows[0].numero_contrato], { prepare: true })).rows;
+        if (ctByMed.length > 0) contrato = ctByMed[0];
+      }
+    }
+
+    if (!contrato) return res.status(404).json({ error: 'No se encontró el contrato. Verifica el número.' });
+
+    // Consumo del período
+    let consumo_m3 = 0, monto_bs = 0;
+    try {
+      const cm = (await db.execute('SELECT consumo_m3, monto_bs FROM consumo_mensual_por_contrato WHERE numero_contrato = ? AND periodo = ?',
+        [contrato.numero_contrato, p], { prepare: true })).rows[0];
+      if (cm) { consumo_m3 = dec(cm.consumo_m3); monto_bs = dec(cm.monto_bs); }
+    } catch { /* sin consumo para este periodo */ }
+
+    // Historial completo de consumos
+    const historialRows = (await db.execute(
+      'SELECT periodo, consumo_m3, monto_bs, estado_facturacion FROM consumo_mensual_por_contrato WHERE numero_contrato = ?',
+      [contrato.numero_contrato], { prepare: true }
+    )).rows;
+    const historial = historialRows.map(r => ({
+      periodo: r.periodo,
+      consumo_m3: +dec(r.consumo_m3).toFixed(2),
+      monto_bs: +dec(r.monto_bs).toFixed(2),
+      estado: r.estado_facturacion || 'pendiente',
+    })).sort((a, b) => b.periodo.localeCompare(a.periodo));
+
+    // Si el período pedido no tiene datos, usar el más reciente con datos
+    const periodoFinal = historial.length > 0 && consumo_m3 === 0
+      ? historial[0].periodo : p;
+    if (periodoFinal !== p && historial.length > 0) {
+      consumo_m3 = historial[0].consumo_m3;
+      monto_bs = historial[0].monto_bs;
+    }
+
+    res.json({
+      contrato: contrato.numero_contrato,
+      nombre: contrato.nombre_titular,
+      identificador: contrato.identificador_titular,
+      tipo_persona: contrato.tipo_persona,
+      direccion: contrato.direccion,
+      distrito: contrato.distrito,
+      zona: contrato.zona,
+      tarifa: contrato.tarifa_alias,
+      consumo_m3: +consumo_m3.toFixed(2),
+      monto_bs: +monto_bs.toFixed(2),
+      periodo: periodoFinal,
+      historial,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ALCALDÍA — Mapa de burbujas por distrito
+app.get('/api/alcaldia/mapa-distritos', async (req, res) => {
+  const p = periodo(req.query);
+  try {
+    const [distRows, consRows] = await Promise.all([
+      db.execute('SELECT id_distrito, nombre, subalcaldia, poblacion, lat, lon FROM catalogo_distritos'),
+      db.execute('SELECT distrito, consumo_m3 FROM consumo_mensual_por_contrato WHERE periodo = ? ALLOW FILTERING', [p], { prepare: true }),
+    ]);
+    const consumoPorDistrito = {};
+    consRows.rows.forEach(r => {
+      consumoPorDistrito[r.distrito] = (consumoPorDistrito[r.distrito] || 0) + dec(r.consumo_m3);
+    });
+    const data = distRows.rows.map(d => {
+      const consumo = +(consumoPorDistrito[d.nombre] || 0).toFixed(2);
+      return {
+        id_distrito: d.id_distrito,
+        nombre: d.nombre,
+        subalcaldia: d.subalcaldia,
+        poblacion: d.poblacion || 0,
+        lat: dec(d.lat),
+        lon: dec(d.lon),
+        consumo_m3: consumo,
+        indice_presion_hidrica: +(consumo * 0.8).toFixed(2),
+      };
+    }).filter(d => d.lat !== 0 && d.lon !== 0);
+    res.json({ periodo: p, data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ALCALDÍA — KPIs por período
+app.get('/api/alcaldia/kpis', async (req, res) => {
+  const p = periodo(req.query);
+  try {
+    const [consRows, distRows] = await Promise.all([
+      db.execute('SELECT distrito, consumo_m3, monto_bs FROM consumo_mensual_por_contrato WHERE periodo = ? ALLOW FILTERING', [p], { prepare: true }),
+      db.execute('SELECT nombre, poblacion FROM catalogo_distritos'),
+    ]);
+    const byDist = {};
+    consRows.rows.forEach(r => {
+      if (!byDist[r.distrito]) byDist[r.distrito] = { consumo: 0, monto: 0, contratos: 0 };
+      byDist[r.distrito].consumo += dec(r.consumo_m3);
+      byDist[r.distrito].monto += dec(r.monto_bs);
+      byDist[r.distrito].contratos++;
+    });
+    const distList = Object.entries(byDist).map(([nombre, v]) => ({ nombre, ...v }))
+      .sort((a, b) => b.consumo - a.consumo);
+    const totalConsumo = distList.reduce((s, d) => s + d.consumo, 0);
+    const totalMonto = distList.reduce((s, d) => s + d.monto, 0);
+    const totalPob = distRows.rows.reduce((s, r) => s + (r.poblacion || 0), 0);
+    res.json({
+      periodo: p,
+      consumo_total_m3: +totalConsumo.toFixed(2),
+      indice_hidrico_total: +(totalConsumo * 0.8).toFixed(2),
+      ingresos_esperados_bs: +totalMonto.toFixed(2),
+      poblacion_beneficiaria: totalPob,
+      top_distrito: distList[0]?.nombre || '—',
+      top_consumo_m3: +(distList[0]?.consumo || 0).toFixed(2),
+      ranking: distList.slice(0, 5).map(d => ({ nombre: d.nombre, consumo_m3: +d.consumo.toFixed(2) })),
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

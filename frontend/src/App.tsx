@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import OperacionalPage from './pages/OperacionalPage';
 import ContabilidadPage from './pages/ContabilidadPage';
 import AdministracionPage from './pages/AdministracionPage';
+import AlcaldiaPage from './pages/AlcaldiaPage';
 import FacturaPage from './pages/FacturaPage';
 import ConsultasPage from './pages/ConsultasPage';
 import './index.css';
@@ -18,6 +19,7 @@ export default function App() {
             <Route path="/operacional" element={<OperacionalPage />} />
             <Route path="/contabilidad" element={<ContabilidadPage />} />
             <Route path="/administracion" element={<AdministracionPage />} />
+            <Route path="/alcaldia" element={<AlcaldiaPage />} />
             <Route path="/factura" element={<FacturaPage />} />
             <Route path="/consultas" element={<ConsultasPage />} />
           </Routes>
