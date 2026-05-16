@@ -1,13 +1,19 @@
 import { NavLink } from 'react-router-dom';
-import { BarChart3, DollarSign, Settings, FileText, Droplets, Database, Building2 } from 'lucide-react';
+import { Droplets } from 'lucide-react';
+import administracionIcon from '../icons/administracion.png';
+import alcaldiaIcon from '../icons/COCHA.svg';
+import consultasIcon from '../icons/consultas.png';
+import contabilidadIcon from '../icons/contabilidad.png';
+import facturacionIcon from '../icons/facturacion.png';
+import semapa1Icon from '../icons/semapa1.png';
 
 const links = [
-  { to: '/operacional', label: 'Dashboard SEMAPA', icon: <BarChart3 size={18} /> },
-  { to: '/alcaldia', label: 'Alcaldía', icon: <Building2 size={18} /> },
-  { to: '/contabilidad', label: 'Contabilidad', icon: <DollarSign size={18} /> },
-  { to: '/administracion', label: 'Administración', icon: <Settings size={18} /> },
-  { to: '/factura', label: 'Facturación', icon: <FileText size={18} /> },
-  { to: '/consultas', label: 'Consultas (25)', icon: <Database size={18} /> },
+  { to: '/operacional', label: 'Dashboard SEMAPA', icon: <img src={semapa1Icon} alt="Dashboard" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
+  { to: '/alcaldia', label: 'Alcaldía', icon: <img src={alcaldiaIcon} alt="Alcaldía" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
+  { to: '/contabilidad', label: 'Contabilidad', icon: <img src={contabilidadIcon} alt="Contabilidad" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
+  { to: '/administracion', label: 'Administración', icon: <img src={administracionIcon} alt="Administración" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
+  { to: '/factura', label: 'Facturación', icon: <img src={facturacionIcon} alt="Facturación" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
+  { to: '/consultas', label: 'Consultas (25)', icon: <img src={consultasIcon} alt="Consultas" style={{ width: 20, height: 20, objectFit: 'contain' }} /> },
 ];
 
 export default function Sidebar() {
