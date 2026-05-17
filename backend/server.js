@@ -13,9 +13,19 @@ import consultasRoutes from './src/routes/consultasRoutes.js';
 import visorRoutes from './src/routes/visorRoutes.js';
 import facturacionRoutes from './src/routes/facturacionRoutes.js';
 import notificacionRoutes from './src/routes/notificacionRoutes.js';
+import mobileRoutes from './src/routes/mobileRoutes.js';
 
 const app = express();
-app.use(cors({ origin: ['http://localhost:5173','http://localhost:5174','http://localhost:3000'], credentials: true }));
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+    'http://localhost:8081',
+    /^exp:\/\//,
+  ],
+  credentials: true,
+}));
 app.use(express.json());
 app.use('/recibos', express.static('./recibos'));
 
@@ -48,6 +58,9 @@ app.use('/api/consultas', consultasRoutes);
 app.use('/api/visor', visorRoutes);
 app.use('/api/factura', facturacionRoutes);
 app.use('/api/notificacion', notificacionRoutes);
+
+// API móvil AppRegistro (también disponible en Go :8090 cuando backend-go esté activo)
+app.use('/api', mobileRoutes);
 
 // 25 CONSULTAS ESTRATÉGICAS
 registrarConsultas(app, db);

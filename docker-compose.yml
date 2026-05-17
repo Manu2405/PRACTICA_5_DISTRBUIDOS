@@ -32,6 +32,25 @@ services:
       - ./backend/recibos:/app/recibos
     restart: unless-stopped
 
+  # API Go para AppRegistro (Expo Go) — puerto 8090
+  backend-go:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    container_name: semapa-backend-go
+    ports:
+      - "8090:8090"
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - CASSANDRA_KEYSPACE=semapa
+      - APP_PORT=8090
+      - JWT_SECRET=semapa-dev-secret
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
