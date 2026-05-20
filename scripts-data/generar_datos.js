@@ -4,6 +4,7 @@
 // ============================================================
 import { createClient, types } from './config.js';
 import { faker } from '@faker-js/faker/locale/es_MX';
+import { calcularMontoPorConsumo } from '../backend/src/services/tarifaService.js';
 
 // --- CONFIG ---
 const TOTAL_MEDIDORES = 1000;
@@ -11,6 +12,10 @@ const MESES_LECTURAS = 6;
 const TASA_ERROR = 0.005;
 const TASA_DUPLICADO = 0.0007;
 const CONCURRENCY = 80; // promesas paralelas
+
+// Regla de negocio SEMAPA: consumo teórico de 300 L/habitante/día.
+// Sobre esta base se reparte el consumo mensual de cada zona entre sus medidores.
+const LITROS_POR_HABITANTE_DIA = 300;
 
 // --- Helpers ---
 function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -189,6 +194,30 @@ async function main() {
   const medActivos = allMedidores.filter(m => m.estado === 'activo');
   console.log(`\n📈 Generando lecturas para ${medActivos.length} medidores activos × ${MESES_LECTURAS} meses...`);
 
+  // Regla SEMAPA: cada habitante consume 300 L/día (valor teórico indicado para la práctica).
+  // Cada medidor = 1 vivienda. Habitantes típicos por categoría según Reglamento Art.4:
+  //   R1 (lotes baldíos, casas en litigio sin habitantes) → 1 persona
+  //   R2 (viviendas precarias 1-2 habitaciones)           → 2 personas
+  //   R3 (viviendas funcionales de 1 planta)              → 4 personas
+  //   R4 (viviendas multi-piso con todas las dependencias)→ 5 personas
+  const HABITANTES_TIPICOS = { R1: 1, R2: 2, R3: 4, R4: 5 };
+
+  // Consumo no-residencial por categoría (L/día base, antes de variabilidad)
+  const LITROS_DIA_NO_RESID = {
+    C:  3000,  // comercial
+    CE: 6000,  // comercial especial
+    I:  5000,  // industrial
+    P:  1500,  // preferencial (hospitales, colegios estatales)
+    S:  2500,  // social (parques, hidrantes)
+  };
+
+  function litrosDiaMedidor(tarifa) {
+    if (HABITANTES_TIPICOS[tarifa] !== undefined) {
+      return HABITANTES_TIPICOS[tarifa] * LITROS_POR_HABITANTE_DIA;
+    }
+    return LITROS_DIA_NO_RESID[tarifa] || 800;
+  }
+
   const ahora = new Date();
   let lecturasCount = 0, erroresCount = 0;
   const consumoMensualContrato = new Map();
@@ -208,11 +237,18 @@ async function main() {
         const diasEnMes = new Date(mesDate.getFullYear(), mesDate.getMonth()+1, 0).getDate();
         let consumoMes = 0;
 
+        // Objetivo diario para este medidor (L/día) según regla 300L/persona × habitantes_típicos
+        const litrosDiaObjetivo = litrosDiaMedidor(med.tarifa);
+
         for (let dia = 1; dia <= diasEnMes; dia++) {
+          // 3 franjas: mañana 50%, tarde 30%, noche 20% (suman 1.0)
+          // Variabilidad diaria ±30% para que las lecturas no sean idénticas.
+          const factorDia = randomFloat(0.7, 1.3);
+          const litrosDia = litrosDiaObjetivo * factorDia;
           const franjas = [
-            { hora: randomInt(0,7), max: 1300 },
-            { hora: randomInt(8,15), max: 380 },
-            { hora: randomInt(16,23), max: 190 },
+            { hora: randomInt(0,7),   share: 0.20 },
+            { hora: randomInt(8,15),  share: 0.50 },
+            { hora: randomInt(16,23), share: 0.30 },
           ];
           for (const fr of franjas) {
             const fechaHora = new Date(mesDate.getFullYear(), mesDate.getMonth(), dia,
@@ -223,8 +259,8 @@ async function main() {
               ? (errores.find(e => e.codigo === status)?.descripcion || 'Error')
               : 'Automatico (Bien)';
 
-            let litros = ['R1','R2','R3','R4'].includes(med.tarifa)
-              ? randomFloat(0, fr.max) : randomFloat(0, 250);
+            // Litros de esta franja (con variabilidad ±20% sobre el share)
+            let litros = litrosDia * fr.share * randomFloat(0.8, 1.2);
             if (hayError) litros = 0;
 
             const m3 = litros / 1000;
@@ -285,10 +321,10 @@ async function main() {
     const cont = contratosMap.get(data.contrato);
     if (!cont) continue;
     const tarifa = tarifas.find(t => t.alias === cont.tarifa_alias);
-    let monto = tarifa ? parseFloat(tarifa.cargo_fijo || 0) : 0;
-    if (tarifa && data.consumo > parseFloat(tarifa.consumo_minimo_m3 || 0)) {
-      monto += (data.consumo - parseFloat(tarifa.consumo_minimo_m3 || 0)) * parseFloat(tarifa.rango_26_50 || 2);
-    }
+    // Usar el mismo servicio que el backend para respetar bloques progresivos (R1/R2/R3...).
+    const monto = tarifa
+      ? calcularMontoPorConsumo(data.consumo, tarifa).montoBs
+      : 0;
     aggQueries.push({ query: `INSERT INTO consumo_mensual_por_contrato (numero_contrato,periodo,identificador_titular,nombre_titular,distrito,zona,tarifa_alias,consumo_m3,monto_bs,estado_facturacion) VALUES (?,?,?,?,?,?,?,?,?,?)`,
       params: [data.contrato, data.periodo, cont.identificador_titular, cont.nombre_titular,
         cont.distrito, cont.zona, cont.tarifa_alias,

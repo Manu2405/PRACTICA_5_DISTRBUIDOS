@@ -151,8 +151,11 @@ async function cargarTarifario(client) {
     else categoria = lastCategoria;
 
     const alias = clean(row[1]);
-    const consumo_minimo = toDecimal(row[2]);
-    const cargo_fijo = toDecimal(row[3]);
+    // Reglamento SEMAPA Art.4: los primeros 12 m³ son fijos para todas las categorías.
+    // CSV col[2] (16.74, 33.37, ...) = monto TOTAL por esos 12 m³ → cargo_fijo.
+    // CSV col[3] (1.40, 2.78, ...) es redundante (= col[2]/12), se ignora.
+    const consumo_minimo = 12;
+    const cargo_fijo = toDecimal(row[2]);
     const r13_25 = toDecimal(row[4]);
     const r26_50 = toDecimal(row[5]);
     const r51_75 = toDecimal(row[6]);
