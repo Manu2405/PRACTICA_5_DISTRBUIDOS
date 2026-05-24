@@ -1,0 +1,10 @@
+Error,Descripcion,,,GeteWayId,Name,Direccion,Location
+1,Automatico (Bien),,,1,Centro C4 / CAD Municipal,Santiváñez entre Junín y Hamiraya,"-17.3936, -66.1578"
+2,Manual,,,2,Alcaldía Central / Plaza 14 de Septiembre,Gral. Achá y Nataniel Aguirre,"-17.3932, -66.1567"
+3,Falla en la alimentación eléctrica,,,3,Subalcaldía Tunari,Jamank'aya 1561,"-17.3655, -66.1712"
+4,Fallo en la conectividad de red,,,4,Subalcaldía Adela Zamudio,Zona norte,"-17.3760, -66.1500"
+5,Configuración incorrecta del sensor o gateway,,,5,Base aérea / zona antenas telecom,Sector aeropuerto Jorge Wilstermann,"-17.4210, -66.1770"
+6,Obstrucción o daño en el caudalímetro,,,6,Cerro San Pedro (torres telecom),Zona alta norte,"-17.3600, -66.1300"
+7,Problemas de firmware o software embebido,,,7,Colina San Sebastián,Centro sur,"-17.4015, -66.1545"
+8,Error en el backend o plataforma IoT,,,,,,
+9,Desincronización de reloj (timestamp incorrecto),,,,,,

@@ -257,7 +257,7 @@ cd ..
 
 # 5. Arrancar backend Node
 cd backend
-npm start
+pnpm start
 ```
 
 ### Validar en Cassandra que los catálogos están bien
