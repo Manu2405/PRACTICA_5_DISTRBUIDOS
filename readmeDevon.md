@@ -318,3 +318,14 @@ Estos puntos quedaron identificados pero NO se tocaron en esta tanda. Si en alg�
 ---
 
 *Cualquier duda sobre la lógica de tarifa, ver el trace explicativo en este mismo readme (sección "Bug 1") o consultar el `Reglamento Interno de Política Tarifaria SEMAPA` (PDF en la raíz del repo).*
+
+---
+
+## por si Vite molesta 
+Si te aparece otro error después
+Es probable que aparezcan más dependencias faltantes (el package.json del frontend está bastante incompleto — usa recharts, react-leaflet, etc., y esos también necesitan tener React peer-installado pero ya lo tendrás).
+
+Si Vite se queja de algo más tipo "Cannot find module 'X'", el patrón es el mismo:
+
+
+pnpm add X
