@@ -1,11 +1,13 @@
 FROM node:20-alpine
 
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+COPY package.json ./
+RUN pnpm install
 
 COPY . .
 
 EXPOSE 5173
 
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]
