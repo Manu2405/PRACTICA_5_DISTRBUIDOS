@@ -3,23 +3,30 @@ import { types } from 'cassandra-driver';
 
 const dec = (v) => (v != null ? parseFloat(v.toString()) : 0);
 
+// Normaliza MAC (XX:XX:XX:XX:XX:XX) o serie a serie sin ":"
+const normalizeMedidorCodigo = (codigo) =>
+  String(codigo || '').toUpperCase().replace(/:/g, '').trim();
+
 export const registrarLectura = async (req, res) => {
   const {
     codigo_medidor,
     lectura_m3,
+    lectura_actual_m3,
+    lectura_anterior_m3,
     observaciones,
     lat,
     lon,
     fecha_hora,
   } = req.body;
 
-  if (!codigo_medidor || lectura_m3 == null) {
-    return res.status(400).json({ error: 'codigo_medidor y lectura_m3 son requeridos' });
+  if (!codigo_medidor) {
+    return res.status(400).json({ error: 'codigo_medidor requerido' });
   }
 
   try {
+    const codigo = normalizeMedidorCodigo(codigo_medidor);
     const med = (
-      await db.execute('SELECT * FROM medidores_por_serie WHERE numero_serie = ?', [codigo_medidor], {
+      await db.execute('SELECT * FROM medidores_por_serie WHERE numero_serie = ?', [codigo], {
         prepare: true,
       })
     ).rows[0];
@@ -27,26 +34,37 @@ export const registrarLectura = async (req, res) => {
 
     const ts = fecha_hora ? new Date(fecha_hora) : new Date();
     const periodo = ts.toISOString().slice(0, 7);
-    const lecturaLitros = dec(lectura_m3) * 1000;
-    const status = 0;
-    const descripcion = observaciones || 'Lectura campo AppRegistro';
+
+    // Si vienen lectura_actual_m3 + lectura_anterior_m3, usar diferencial; si no, usar lectura_m3
+    const lecAct = lectura_actual_m3 != null ? dec(lectura_actual_m3) : 0;
+    const lecAnt = lectura_anterior_m3 != null ? dec(lectura_anterior_m3) : 0;
+    let consumoM3 = dec(lectura_m3);
+    if (lecAct > 0 || lecAnt > 0) {
+      consumoM3 = Math.max(0, lecAct - lecAnt);
+    }
+    const lecturaLitros = consumoM3 * 1000;
+    const status = 1;
+    const descripcion = observaciones || 'Lectura manual via AppRegistro';
 
     await db.execute(
-      `INSERT INTO lecturas_por_medidor_mes 
-       (numero_serie, periodo, fecha_hora, mac, radiobase, lectura_m3, lectura_litros, status, descripcion_status, distrito, zona) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO lecturas_por_medidor_mes
+       (numero_serie, periodo, fecha_hora, mac, radiobase, lectura_m3, lectura_litros, lectura_anterior_m3, lectura_actual_m3, status, descripcion_status, distrito, zona, origen)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        codigo_medidor,
+        codigo,
         periodo,
         ts,
         med.mac || '',
         med.radiobase || '',
-        types.BigDecimal.fromString(dec(lectura_m3).toFixed(4)),
+        types.BigDecimal.fromString(consumoM3.toFixed(4)),
         types.BigDecimal.fromString(lecturaLitros.toFixed(2)),
+        types.BigDecimal.fromString(lecAnt.toFixed(4)),
+        types.BigDecimal.fromString(lecAct.toFixed(4)),
         status,
         descripcion,
         med.distrito || '',
         med.zona || '',
+        'app_movil',
       ],
       { prepare: true }
     );

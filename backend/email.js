@@ -75,7 +75,15 @@ export async function enviarEmail({ destinatario, nombre, contrato, periodo, con
  * Envía PREAVISO DE COBRANZA por email (sin adjuntos, urgencia visual).
  * Llamado desde el botón "Aviso de Cobranza" en el dashboard de Contabilidad.
  */
-export async function enviarPreavisoCobranza({ destinatario, nombre, contrato, deudaTotalBs, periodo, mesesAtraso }) {
+export async function enviarPreavisoCobranza({ destinatario, nombre, contrato, deudaTotalBs, periodo, mesesAtraso, pdfPath }) {
+  const adjuntos = [];
+  if (pdfPath && fs.existsSync(pdfPath)) {
+    adjuntos.push({
+      filename: `AvisoCobranza_${contrato}_${periodo || ''}.pdf`,
+      path: path.resolve(pdfPath),
+    });
+  }
+
   const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f8f9fa; border-radius: 12px; overflow: hidden;">
       <div style="background: linear-gradient(135deg, #ef4444, #b91c1c); padding: 30px; text-align: center;">
@@ -117,6 +125,7 @@ export async function enviarPreavisoCobranza({ destinatario, nombre, contrato, d
     to: destinatario,
     subject: `⚠️ SEMAPA — Aviso de cobranza · Contrato ${contrato} · Bs ${Number(deudaTotalBs).toFixed(2)}`,
     html,
+    attachments: adjuntos,
   });
   return { messageId: info.messageId, accepted: info.accepted };
 }

@@ -52,8 +52,12 @@ export const listMedidores = async (req, res) => {
   }
 };
 
+// Normaliza MAC con o sin ":" a serie sin ":"
+const normalizeMedidorCodigo = (codigo) =>
+  String(codigo || '').toUpperCase().replace(/:/g, '').trim();
+
 export const getMedidorByCodigo = async (req, res) => {
-  const codigo = req.params.codigo;
+  const codigo = normalizeMedidorCodigo(req.params.codigo);
   try {
     const row = (
       await db.execute('SELECT * FROM medidores_por_serie WHERE numero_serie = ?', [codigo], { prepare: true })
@@ -61,28 +65,52 @@ export const getMedidorByCodigo = async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Medidor no encontrado' });
     const medidor = await enrichMedidor(row);
 
-    const periodo = req.query.periodo || new Date().toISOString().slice(0, 7);
-    const lecturas = (
-      await db.execute(
-        'SELECT fecha_hora, lectura_m3, lectura_litros, status, descripcion_status FROM lecturas_por_medidor_mes WHERE numero_serie = ? AND periodo = ?',
-        [codigo, periodo],
-        { prepare: true }
-      )
-    ).rows;
+    // Buscar la última lectura del medidor en los últimos 4 períodos
+    const hoy = new Date();
+    const periodos = [];
+    for (let i = 0; i < 4; i++) {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+      periodos.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
 
-    const ultima = lecturas[0];
-    const anterior = lecturas[1];
-    const lecturaActual = ultima ? dec(ultima.lectura_m3) : 0;
-    const lecturaAnterior = anterior ? dec(anterior.lectura_m3) : lecturaActual;
+    let ultimaLectura = null;
+    for (const p of periodos) {
+      const rows = (
+        await db.execute(
+          'SELECT fecha_hora, lectura_m3, lectura_actual_m3, lectura_anterior_m3, status FROM lecturas_por_medidor_mes WHERE numero_serie = ? AND periodo = ?',
+          [codigo, p],
+          { prepare: true }
+        )
+      ).rows;
+      if (rows.length) {
+        ultimaLectura = { ...rows[0], periodo: p };
+        break;
+      }
+    }
+
+    // Prioridad: lectura_actual_m3 (real del medidor) > lectura_m3 (consumo)
+    const lecturaAnterior = ultimaLectura
+      ? (ultimaLectura.lectura_actual_m3 != null
+          ? Math.round(dec(ultimaLectura.lectura_actual_m3))
+          : Math.round(dec(ultimaLectura.lectura_m3)))
+      : 0;
+
+    const periodoActual = req.query.periodo || `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
 
     res.json({
       ...medidor,
-      periodo,
-      lecturaActual,
+      periodo: periodoActual,
+      lecturaActual: lecturaAnterior, // sugerencia visual (la app pide >= esto)
       lecturaAnterior,
-      consumoParcial: +(lecturaActual - lecturaAnterior).toFixed(2),
-      ultimaLectura: ultima
-        ? { fechaHora: ultima.fecha_hora, lecturaM3: dec(ultima.lectura_m3), status: ultima.status }
+      consumoParcial: 0,
+      ultimaLectura: ultimaLectura
+        ? {
+            fechaHora: ultimaLectura.fecha_hora,
+            periodo: ultimaLectura.periodo,
+            lecturaM3: dec(ultimaLectura.lectura_m3),
+            lecturaActualM3: dec(ultimaLectura.lectura_actual_m3),
+            status: ultimaLectura.status,
+          }
         : null,
     });
   } catch (e) {

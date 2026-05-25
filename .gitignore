@@ -13,6 +13,7 @@ backend-go/recibos/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+DocP
 
 # Scripts
 scripts-data/node_modules/

@@ -230,48 +230,167 @@ export const getPreavisos = async (req, res) => {
   }
 };
 
-// Envía aviso de cobranza por email real (usa nodemailer del backend)
+// Envía aviso de cobranza por email con PDF formato SEMAPA adjunto.
+// Busca datos reales del contrato, lecturas e historial de consumo en Cassandra.
 export const sendAvisoCobranza = async (req, res) => {
-  const { contrato, nombre, deudaTotalBs, email: emailDestino } = req.body;
+  const { contrato, nombre, deudaTotalBs, email: emailDestino, mesesAtraso } = req.body;
   if (!contrato || !nombre) {
     return res.status(400).json({ error: 'Faltan datos del deudor' });
   }
 
-  try {
-    const mensaje = `Estimado(a) ${nombre}, le recordamos que tiene una deuda pendiente de Bs ${deudaTotalBs} asociada al contrato ${contrato}. Por favor, regularice su pago.`;
+  const mensaje = `Estimado(a) ${nombre}, le recordamos que tiene una deuda pendiente de Bs ${deudaTotalBs} asociada al contrato ${contrato}. Por favor, regularice su pago.`;
 
-    // Si hay email del destinatario, intentar envío real
-    let emailEnviado = false;
-    if (emailDestino && process.env.SMTP_USER) {
-      try {
-        const { enviarPreavisoCobranza } = await import('../../email.js');
-        await enviarPreavisoCobranza({
-          destinatario: emailDestino, nombre, contrato, deudaTotalBs,
-        });
-        emailEnviado = true;
-      } catch (mailErr) {
-        console.warn('Email no enviado:', mailErr.message);
+  // --- Buscar datos enriquecidos para el PDF ---
+  let datosPDF = null;
+  try {
+    // 1) Contrato (titular, dirección, tarifa, distrito, zona)
+    const contratoRow = (await db.execute(
+      'SELECT * FROM contratos_por_numero WHERE numero_contrato = ?',
+      [contrato], { prepare: true }
+    )).rows[0];
+
+    // 2) Historial de consumo (todos los períodos del contrato)
+    const consumosHist = (await db.execute(
+      'SELECT periodo, consumo_m3, monto_bs, fecha_emision, fecha_vencimiento FROM consumo_mensual_por_contrato WHERE numero_contrato = ?',
+      [contrato], { prepare: true }
+    )).rows.sort((a, b) => b.periodo.localeCompare(a.periodo));
+
+    // 3) Período más reciente (datos del aviso actual)
+    const periodoActual = consumosHist[0];
+    const periodoAnterior = consumosHist[1];
+
+    // 4) Medidor del contrato
+    const medidores = (await db.execute(
+      'SELECT numero_serie, mac FROM medidores_por_serie WHERE numero_contrato = ? LIMIT 1 ALLOW FILTERING',
+      [contrato], { prepare: true }
+    )).rows;
+    const medidor = medidores[0];
+
+    // 5) Últimas lecturas del medidor (para fechas actuales/anteriores reales)
+    let lecturaActual = null, lecturaAnterior = null;
+    if (medidor && periodoActual) {
+      const lect = (await db.execute(
+        'SELECT fecha_hora, lectura_actual_m3, lectura_anterior_m3 FROM lecturas_por_medidor_mes WHERE numero_serie = ? AND periodo = ? LIMIT 5',
+        [medidor.numero_serie, periodoActual.periodo], { prepare: true }
+      )).rows;
+      if (lect.length) {
+        lecturaActual = lect[0];
+        lecturaAnterior = lect[lect.length - 1];
       }
     }
 
-    // Registrar la notificación en Cassandra
-    try {
-      const p = new Date().toISOString().slice(0, 7);
-      await db.execute(
-        'INSERT INTO notificaciones_por_contrato (numero_contrato,periodo,fecha_hora,formato,identificador,estado,tipo,mensaje) VALUES (?,?,?,?,?,?,?,?)',
-        [contrato, p, new Date(), 'email', '', emailEnviado ? 'entregado' : 'enviado', 'aviso_cobranza', mensaje],
-        { prepare: true }
-      );
-    } catch (logErr) {
-      console.warn('No se pudo registrar notificación:', logErr.message);
-    }
-
-    res.json({
-      estado: emailEnviado ? 'enviado_email' : 'simulado',
-      mensaje,
-      canales: emailEnviado ? ['Email'] : ['WhatsApp (simulado)', 'SMS (simulado)', 'Email (simulado)'],
+    // 6) Historial últimos 6 meses (mes → consumo)
+    const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio',
+                   'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const historial = consumosHist.slice(0, 6).map(c => {
+      const [, mesNum] = c.periodo.split('-');
+      return { mes: MESES[parseInt(mesNum) - 1] || c.periodo, consumo: Math.round(dec(c.consumo_m3)) };
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+
+    // Categoría legible
+    const categoriaMap = {
+      R1: 'Residencial 1', R2: 'Residencial 2', R3: 'Residencial 3', R4: 'Residencial 4',
+      C: 'Comercial', CE: 'Comercial Especial', I: 'Industrial', P: 'Preferencial', S: 'Social',
+    };
+    const categoria = contratoRow ? (categoriaMap[contratoRow.tarifa_alias] || contratoRow.tarifa_alias) : 'Residencial';
+
+    // Formato de fecha DD/MM/YYYY
+    const fmtFecha = (d) => {
+      if (!d) return '-';
+      const dt = d instanceof Date ? d : new Date(d.toString());
+      return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+    };
+
+    datosPDF = {
+      codigoCliente: contrato,
+      contrato,
+      nombre: contratoRow?.nombre_titular || nombre,
+      categoria,
+      ciclo: contratoRow?.distrito ? String(contratoRow.distrito).slice(-2).padStart(2, '0') : '01',
+      direccion: contratoRow?.direccion || 'S/D',
+      tipoMedidor: 'A',
+      nroMedAgua: medidor?.numero_serie || '-',
+      nroMedPozo: '-',
+      fechaLecActual: fmtFecha(lecturaActual?.fecha_hora),
+      lectActual: lecturaActual ? Math.round(dec(lecturaActual.lectura_actual_m3)) : '-',
+      consumo: periodoActual ? Math.round(dec(periodoActual.consumo_m3)) : '-',
+      fechaEmision: fmtFecha(periodoActual?.fecha_emision),
+      periodo: periodoActual?.periodo || '-',
+      fechaLecAnterior: fmtFecha(lecturaAnterior?.fecha_hora),
+      lectAnterior: lecturaAnterior ? Math.round(dec(lecturaAnterior.lectura_anterior_m3)) : '-',
+      consumoPromedio: historial.length ? Math.round(historial.reduce((s, h) => s + h.consumo, 0) / historial.length) : '-',
+      historial,
+      fechaVto: fmtFecha(periodoActual?.fecha_vencimiento),
+      monto: periodoActual ? dec(periodoActual.monto_bs) : Number(deudaTotalBs) || 0,
+      deudaTotalBs: Number(deudaTotalBs) || 0,
+      mesesAtraso: mesesAtraso || 1,
+      observacion: 'CON MEDIDOR',
+    };
+  } catch (e) {
+    console.warn('No se pudieron obtener datos para PDF:', e.message);
   }
+
+  // --- Generar PDF ---
+  let pdfPath = null;
+  if (datosPDF) {
+    try {
+      const { generarAvisoCobranzaPDF } = await import('../../pdf.js');
+      pdfPath = await generarAvisoCobranzaPDF(datosPDF);
+      console.log(`📄 PDF generado: ${pdfPath}`);
+    } catch (pdfErr) {
+      console.warn('Error generando PDF:', pdfErr.message);
+    }
+  }
+
+  // --- Intentar envío real ---
+  let emailEnviado = false;
+  let errorEmail = null;
+  if (emailDestino) {
+    if (!process.env.SMTP_USER) {
+      errorEmail = 'SMTP_USER no configurado en backend/.env';
+    } else {
+      try {
+        const { enviarPreavisoCobranza } = await import('../../email.js');
+        const result = await enviarPreavisoCobranza({
+          destinatario: emailDestino,
+          nombre, contrato, deudaTotalBs,
+          periodo: datosPDF?.periodo,
+          mesesAtraso,
+          pdfPath,
+        });
+        emailEnviado = true;
+        console.log(`✉️  Email enviado a ${emailDestino} — id: ${result.messageId}`);
+      } catch (mailErr) {
+        errorEmail = mailErr.message;
+        if (mailErr.code) errorEmail = `[${mailErr.code}] ${errorEmail}`;
+        if (mailErr.responseCode) errorEmail = `${errorEmail} (SMTP ${mailErr.responseCode})`;
+        console.error('❌ Email FALLÓ:', errorEmail);
+      }
+    }
+  }
+
+  // --- Registrar la notificación en Cassandra ---
+  try {
+    const p = new Date().toISOString().slice(0, 7);
+    await db.execute(
+      'INSERT INTO notificaciones_por_contrato (numero_contrato,periodo,fecha_hora,formato,identificador,estado,tipo,mensaje) VALUES (?,?,?,?,?,?,?,?)',
+      [
+        contrato, p, new Date(), 'email', emailDestino || '',
+        emailEnviado ? 'entregado' : (errorEmail ? 'fallido' : 'simulado'),
+        'aviso_cobranza', mensaje,
+      ],
+      { prepare: true }
+    );
+  } catch (logErr) {
+    console.warn('No se pudo registrar notificación:', logErr.message);
+  }
+
+  res.json({
+    estado: emailEnviado ? 'enviado_email' : (errorEmail ? 'fallido' : 'simulado'),
+    mensaje,
+    destinatario: emailDestino || null,
+    pdfGenerado: pdfPath ? pdfPath.split(/[\\/]/).pop() : null,
+    error: errorEmail,
+    canales: emailEnviado ? ['Email con PDF adjunto'] : ['Email (simulado)'],
+  });
 };
