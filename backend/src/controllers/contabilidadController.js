@@ -3,28 +3,6 @@ import db from '../../db.js';
 const dec = v => v ? parseFloat(v.toString()) : 0;
 const periodo = q => q.periodo || new Date().toISOString().slice(0, 7);
 
-// Hash determinista 32-bit del numero_contrato. Sirve para asignar
-// días de atraso estables a cada contrato (mismo input → mismo output)
-// sin tocar generar_datos.js. Reemplaza el Math.random() previo.
-function hashContrato(numero) {
-  const s = String(numero || '');
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h);
-}
-
-// ~20% de los contratos quedan como morosos (determinístico: hash % 5 === 0)
-function esMoroso(numero) {
-  return hashContrato(numero) % 5 === 0;
-}
-
-// Días de atraso 0..150 distribuidos por hash. Reservado para los morosos.
-function diasAtrasoMock(numero) {
-  return hashContrato(numero) % 151;
-}
-
 function bucketDe(dias) {
   if (dias <= 30) return '0-30';
   if (dias <= 60) return '31-60';
@@ -47,8 +25,7 @@ export const getIngresosTarifa = async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
-// Facturación mensual — serie temporal de todos los períodos
-// Obligatorio PDF Dashboard 3 (monto facturado mensual Bs)
+// Facturación mensual — serie temporal (Obligatorio PDF Dashboard 3)
 export const getFacturacionMensual = async (req, res) => {
   try {
     const rows = (await db.execute(
@@ -65,7 +42,6 @@ export const getFacturacionMensual = async (req, res) => {
       m[p].contratos++;
     });
 
-    // Orden cronológico ascendente
     const out = Object.values(m)
       .sort((a, b) => a.periodo.localeCompare(b.periodo))
       .map((d, i, arr) => {
@@ -85,7 +61,7 @@ export const getFacturacionMensual = async (req, res) => {
   }
 };
 
-// Facturación agrupada por distrito en el período (Obligatorio PDF Dashboard 3)
+// Facturación agrupada por distrito (Obligatorio PDF Dashboard 3)
 export const getFacturacionPorDistrito = async (req, res) => {
   const p = periodo(req.query);
   try {
@@ -114,7 +90,7 @@ export const getFacturacionPorDistrito = async (req, res) => {
   }
 };
 
-// Obtiene el top de consumidores
+// Top consumidores
 export const getTopConsumidores = async (req, res) => {
   const p = periodo(req.query); const lim = parseInt(req.query.limit || '20');
   try {
@@ -127,20 +103,20 @@ export const getTopConsumidores = async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 };
 
-// Obtiene los deudores morosos (Obligatorio PDF Dashboard 3 — soporte para "cartera vencida")
-// Mock determinístico por hash de numero_contrato. Mismo contrato → mismo atraso siempre.
+// Morosos (sin mock — usa estado_facturacion y dias_atraso reales)
 export const getMorosos = async (req, res) => {
   const p = periodo(req.query);
   try {
     const rows = (await db.execute(
-      'SELECT numero_contrato, periodo, nombre_titular, distrito, zona, monto_bs FROM consumo_mensual_por_contrato ALLOW FILTERING'
+      'SELECT numero_contrato, periodo, nombre_titular, distrito, zona, monto_bs, estado_facturacion, dias_atraso FROM consumo_mensual_por_contrato ALLOW FILTERING'
     )).rows;
 
     const morosos = rows
-      .filter(r => r.periodo === p && esMoroso(r.numero_contrato))
+      .filter(r => r.periodo === p && (r.estado_facturacion === 'vencido' || r.estado_facturacion === 'pendiente'))
       .map(r => {
-        const dias = diasAtrasoMock(r.numero_contrato);
-        const mesesAtraso = Math.max(1, Math.floor(dias / 30));
+        const dias = r.dias_atraso || 0;
+        const mesesAtraso = Math.max(1, Math.ceil(dias / 30));
+        const monto = dec(r.monto_bs);
         return {
           contrato: r.numero_contrato,
           nombre: r.nombre_titular,
@@ -149,7 +125,7 @@ export const getMorosos = async (req, res) => {
           mesesAtraso,
           diasAtraso: dias,
           bucket: bucketDe(dias),
-          deudaTotalBs: +(dec(r.monto_bs) * mesesAtraso).toFixed(2),
+          deudaTotalBs: +(monto * mesesAtraso).toFixed(2),
         };
       })
       .sort((a, b) => b.deudaTotalBs - a.deudaTotalBs)
@@ -161,16 +137,15 @@ export const getMorosos = async (req, res) => {
   }
 };
 
-// Cartera vencida con desglose por antigüedad (aging report)
+// Cartera vencida REAL con aging (sin mock)
 // Obligatorio PDF Dashboard 3
 export const getCarteraVencida = async (req, res) => {
   const p = periodo(req.query);
   try {
     const rows = (await db.execute(
-      'SELECT numero_contrato, periodo, monto_bs FROM consumo_mensual_por_contrato ALLOW FILTERING'
+      'SELECT numero_contrato, periodo, monto_bs, estado_facturacion, dias_atraso FROM consumo_mensual_por_contrato ALLOW FILTERING'
     )).rows;
 
-    // Inicializa buckets en orden fijo
     const buckets = {
       '0-30':  { rango: '0-30 días',  contratos: 0, totalBs: 0, color: '#10b981' },
       '31-60': { rango: '31-60 días', contratos: 0, totalBs: 0, color: '#f59e0b' },
@@ -183,10 +158,10 @@ export const getCarteraVencida = async (req, res) => {
     let sumaDias = 0;
 
     rows
-      .filter(r => r.periodo === p && esMoroso(r.numero_contrato))
+      .filter(r => r.periodo === p && (r.estado_facturacion === 'vencido' || r.estado_facturacion === 'pendiente'))
       .forEach(r => {
-        const dias = diasAtrasoMock(r.numero_contrato);
-        const mesesAtraso = Math.max(1, Math.floor(dias / 30));
+        const dias = r.dias_atraso || 0;
+        const mesesAtraso = Math.max(1, Math.ceil(dias / 30));
         const deuda = dec(r.monto_bs) * mesesAtraso;
         const b = bucketDe(dias);
         buckets[b].contratos += 1;
@@ -214,19 +189,88 @@ export const getCarteraVencida = async (req, res) => {
   }
 };
 
-// Envia el aviso de cobranza
+// Preavisos emitidos (Obligatorio PDF Dashboard 3)
+// Agrega notificaciones_por_contrato con tipo='preaviso' por período y canal
+export const getPreavisos = async (req, res) => {
+  const p = periodo(req.query);
+  try {
+    const rows = (await db.execute(
+      "SELECT periodo, formato, estado, tipo FROM notificaciones_por_contrato WHERE tipo = 'preaviso' ALLOW FILTERING"
+    )).rows;
+    const filtered = rows.filter(r => r.periodo === p);
+
+    const porCanal = {};
+    const porEstado = { entregado: 0, enviado: 0, fallido: 0 };
+    let total = 0;
+
+    filtered.forEach(r => {
+      const canal = r.formato || 'desconocido';
+      if (!porCanal[canal]) porCanal[canal] = { canal, total: 0, entregado: 0, enviado: 0, fallido: 0 };
+      porCanal[canal].total++;
+      const est = r.estado || 'enviado';
+      if (porCanal[canal][est] !== undefined) porCanal[canal][est]++;
+      if (porEstado[est] !== undefined) porEstado[est]++;
+      total++;
+    });
+
+    const tasaEntrega = total ? +(porEstado.entregado / total * 100).toFixed(1) : 0;
+
+    res.json({
+      periodo: p,
+      total,
+      tasaEntregaPct: tasaEntrega,
+      porCanal: Object.values(porCanal).map(c => ({
+        ...c,
+        tasaEntrega: c.total ? +(c.entregado / c.total * 100).toFixed(1) : 0,
+      })),
+      porEstado,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
+// Envía aviso de cobranza por email real (usa nodemailer del backend)
 export const sendAvisoCobranza = async (req, res) => {
-  const { contrato, nombre, deudaTotalBs } = req.body;
+  const { contrato, nombre, deudaTotalBs, email: emailDestino } = req.body;
   if (!contrato || !nombre) {
     return res.status(400).json({ error: 'Faltan datos del deudor' });
   }
 
   try {
-    // Aquí iría la lógica de integración con email/SMS/WhatsApp
     const mensaje = `Estimado(a) ${nombre}, le recordamos que tiene una deuda pendiente de Bs ${deudaTotalBs} asociada al contrato ${contrato}. Por favor, regularice su pago.`;
-    
-    // Simulamos éxito
-    res.json({ estado: 'enviado', mensaje, canales: ['WhatsApp', 'SMS', 'Email'] });
+
+    // Si hay email del destinatario, intentar envío real
+    let emailEnviado = false;
+    if (emailDestino && process.env.SMTP_USER) {
+      try {
+        const { enviarPreavisoCobranza } = await import('../../email.js');
+        await enviarPreavisoCobranza({
+          destinatario: emailDestino, nombre, contrato, deudaTotalBs,
+        });
+        emailEnviado = true;
+      } catch (mailErr) {
+        console.warn('Email no enviado:', mailErr.message);
+      }
+    }
+
+    // Registrar la notificación en Cassandra
+    try {
+      const p = new Date().toISOString().slice(0, 7);
+      await db.execute(
+        'INSERT INTO notificaciones_por_contrato (numero_contrato,periodo,fecha_hora,formato,identificador,estado,tipo,mensaje) VALUES (?,?,?,?,?,?,?,?)',
+        [contrato, p, new Date(), 'email', '', emailEnviado ? 'entregado' : 'enviado', 'aviso_cobranza', mensaje],
+        { prepare: true }
+      );
+    } catch (logErr) {
+      console.warn('No se pudo registrar notificación:', logErr.message);
+    }
+
+    res.json({
+      estado: emailEnviado ? 'enviado_email' : 'simulado',
+      mensaje,
+      canales: emailEnviado ? ['Email'] : ['WhatsApp (simulado)', 'SMS (simulado)', 'Email (simulado)'],
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

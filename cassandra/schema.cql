@@ -222,10 +222,13 @@ CREATE TABLE IF NOT EXISTS lecturas_por_medidor_mes (
   radiobase text,
   lectura_m3 decimal,
   lectura_litros decimal,
+  lectura_anterior_m3 decimal,
+  lectura_actual_m3 decimal,
   status int,
   descripcion_status text,
   distrito text,
   zona text,
+  origen text,
   PRIMARY KEY ((numero_serie, periodo), fecha_hora)
 ) WITH CLUSTERING ORDER BY (fecha_hora DESC);
 
@@ -253,6 +256,10 @@ CREATE TABLE IF NOT EXISTS consumo_mensual_por_contrato (
   consumo_m3 decimal,
   monto_bs decimal,
   estado_facturacion text,
+  fecha_emision date,
+  fecha_vencimiento date,
+  fecha_pago timestamp,
+  dias_atraso int,
   PRIMARY KEY ((numero_contrato), periodo)
 ) WITH CLUSTERING ORDER BY (periodo DESC);
 
@@ -341,6 +348,7 @@ CREATE TABLE IF NOT EXISTS notificaciones_por_contrato (
   formato text,
   identificador text,
   estado text,
+  tipo text,
   mensaje text,
   PRIMARY KEY ((numero_contrato, periodo), fecha_hora)
 ) WITH CLUSTERING ORDER BY (fecha_hora DESC);

@@ -14,6 +14,12 @@ import { useAuthStore } from '../../src/store/authStore';
 
 type Form = { codigo: string; lectura: string; observaciones: string };
 
+// Aplica máscara MAC (XX:XX:XX:XX:XX:XX) al input
+function formatMAC(value: string): string {
+  const hex = value.replace(/[^0-9A-Fa-f]/g, '').toUpperCase().slice(0, 12);
+  return hex.match(/.{1,2}/g)?.join(':') ?? hex;
+}
+
 export default function RegistroScreen() {
   const [codigoBuscar, setCodigoBuscar] = useState('');
   const isOnline = useAppStore((s) => s.isOnline);
@@ -22,10 +28,12 @@ export default function RegistroScreen() {
     defaultValues: { codigo: '', lectura: '', observaciones: '' },
   });
 
+  // Backend acepta MAC con o sin ":" — normaliza removiendo ":" para la query
+  const codigoQuery = codigoBuscar.replace(/:/g, '');
   const medidor = useQuery({
-    queryKey: ['medidor', codigoBuscar],
-    queryFn: () => medidoresApi.get(codigoBuscar),
-    enabled: codigoBuscar.length >= 3,
+    queryKey: ['medidor', codigoQuery],
+    queryFn: () => medidoresApi.get(codigoQuery),
+    enabled: codigoQuery.length >= 6,
   });
 
   const guardar = useMutation({
@@ -43,9 +51,20 @@ export default function RegistroScreen() {
         /* GPS opcional */
       }
 
+      // Lectura entera (formato CSV). Validar que sea >= lectura anterior
+      const lecturaActual = parseInt(f.lectura, 10);
+      const lecturaAnterior = medidor.data?.lecturaAnterior ?? 0;
+      if (isNaN(lecturaActual)) throw new Error('Lectura inválida');
+      if (lecturaActual < lecturaAnterior) {
+        throw new Error(`Lectura (${lecturaActual}) menor a la anterior (${lecturaAnterior})`);
+      }
+
+      const consumoM3 = lecturaActual - lecturaAnterior;
       const body = {
-        codigo_medidor: f.codigo,
-        lectura_m3: parseFloat(f.lectura),
+        codigo_medidor: f.codigo.replace(/:/g, ''),
+        lectura_m3: consumoM3,
+        lectura_actual_m3: lecturaActual,
+        lectura_anterior_m3: lecturaAnterior,
         observaciones: f.observaciones,
         lat,
         lon,
@@ -73,23 +92,25 @@ export default function RegistroScreen() {
   });
 
   return (
-    <Screen title="Registro de lectura" subtitle="Buscar medidor e ingresar lectura actual">
+    <Screen title="Registro de lectura" subtitle="Ingrese MAC del medidor IoT y lectura actual">
       <Input
-        label="Código medidor"
+        label="MAC del medidor IoT"
         value={codigoBuscar}
-        onChangeText={setCodigoBuscar}
+        onChangeText={(t) => setCodigoBuscar(formatMAC(t))}
         onSubmitEditing={() => setValue('codigo', codigoBuscar)}
-        placeholder="Ej: MED-00001"
+        placeholder="XX:XX:XX:XX:XX:XX"
+        autoCapitalize="characters"
       />
       <Button label="Buscar medidor" onPress={() => setValue('codigo', codigoBuscar)} />
 
       {medidor.data ? (
         <Card title="Cliente / Medidor">
-          <Text className="text-white">Serie: {medidor.data.numeroSerie}</Text>
-          <Text className="text-slate-300">Titular: {medidor.data.contrato?.titular || '—'}</Text>
+          <Text className="text-white">MAC: {medidor.data.mac}</Text>
+          <Text className="text-slate-300">Modelo: {medidor.data.modelo}</Text>
+          <Text className="text-slate-300">Distrito: {medidor.data.distrito} · Zona: {medidor.data.zona}</Text>
           <Text className="text-slate-300">Tarifa: {medidor.data.tarifaAlias}</Text>
           <Text className="text-semapa-accent mt-2">
-            Lectura anterior: {medidor.data.lecturaAnterior} m³ · Parcial: {medidor.data.consumoParcial} m³
+            Lectura anterior: {medidor.data.lecturaAnterior} m³
           </Text>
         </Card>
       ) : null}
@@ -98,14 +119,20 @@ export default function RegistroScreen() {
         control={control}
         name="codigo"
         render={({ field: { value, onChange } }) => (
-          <Input label="Código confirmado" value={value} onChangeText={onChange} />
+          <Input label="MAC confirmada" value={value} onChangeText={onChange} />
         )}
       />
       <Controller
         control={control}
         name="lectura"
         render={({ field: { value, onChange } }) => (
-          <Input label="Lectura actual (m³)" value={value} onChangeText={onChange} keyboardType="decimal-pad" />
+          <Input
+            label="Lectura actual (m³ enteros)"
+            value={value}
+            onChangeText={(t) => onChange(t.replace(/[^0-9]/g, ''))}
+            keyboardType="number-pad"
+            placeholder={medidor.data ? `> ${medidor.data.lecturaAnterior}` : '0'}
+          />
         )}
       />
       <Controller

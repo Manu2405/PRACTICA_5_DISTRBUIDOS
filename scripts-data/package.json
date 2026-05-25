@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "cargar-catalogos": "node cargar_catalogos.js",
+    "cargar-csvs": "node cargar_csvs.js",
+    "cargar-real": "node cargar_catalogos.js && node cargar_csvs.js",
     "generar-datos": "node generar_datos.js",
     "cargar-todo": "node cargar_catalogos.js && node generar_datos.js"
   },

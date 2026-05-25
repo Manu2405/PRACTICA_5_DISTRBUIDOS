@@ -232,63 +232,283 @@ Casos típicos según la regla 300 L/persona:
 
 ---
 
-## Cómo aplicar los cambios
+## Cómo levantar el proyecto con Docker (de cero)
 
-Estos cambios afectan **datos en Cassandra**, no solo código. Hay que **recargar catálogos y regenerar datos** para que tomen efecto:
+El proyecto está completamente dockerizado en [docker-compose.yml](docker-compose.yml). Los servicios definidos son:
+
+| Servicio | Puerto | Imagen / Build | Notas |
+|---|---|---|---|
+| `cassandra` | 9042 | `cassandra:4.1` | Base de datos NoSQL — siempre en Docker |
+| `backend` | 8080 | `./backend` | API Node/Express MVC (dashboards) |
+| `backend-go` | 8090 | `./backend-go` | API Go (mobile-app AppRegistro) |
+| `frontend` | 5173 | `./frontend` | React + Vite (3 dashboards) |
+| `visor` | 5174 | `./visor` | Visor de búsqueda |
+
+El `mobile-app` (Expo Go) NO está en Docker — se corre con `npx expo start` en local.
+
+### Pre-requisitos en la máquina anfitriona
+
+| Herramienta | Para qué | Cómo instalar |
+|---|---|---|
+| **Docker Desktop** | Correr los containers | https://docker.com/products/docker-desktop |
+| **Node.js ≥ 20** | Solo para `scripts-data` y `mobile-app` (no para servicios dockerizados) | https://nodejs.org |
+| **pnpm** | Gestor de paquetes (más rápido que npm) | Ver "Instalar pnpm" abajo |
+
+#### Instalar pnpm (si no lo tienes)
 
 ```powershell
-# 1. Reiniciar Cassandra (limpia volumen para empezar de cero)
+# Opción A — Corepack (recomendada, viene con Node 16.13+)
+# Abrir PowerShell como Administrador:
+corepack enable
+corepack prepare pnpm@latest --activate
+
+# Opción B — Standalone (sin admin)
+iwr https://get.pnpm.io/install.ps1 -useb | iex
+# Cierra y reabre PowerShell
+
+# Verificar
+pnpm -v   # debe imprimir 9.x o 10.x
+```
+
+### Arranque desde cero (flujo completo, ~7 minutos)
+
+```powershell
+# 1. Limpiar Docker (borra datos previos)
 docker compose down -v
+
+# 2. Levantar SOLO Cassandra primero (los otros servicios dependen de ella)
 docker compose up -d cassandra
-# esperar ~1 minuto hasta healthy
 
-# 2. Cargar schema (PowerShell)
-Get-Content cassandra/schema.cql | docker exec -i semapa-cassandra cqlsh
-# o Git Bash:
-# docker exec -i semapa-cassandra cqlsh < cassandra/schema.cql
+# 3. Esperar a que esté saludable (~60-90 seg)
+# Repite hasta que diga "healthy":
+docker inspect -f '{{.State.Health.Status}}' semapa-cassandra
 
-# 3. Cargar catálogos con el mapeo corregido
-cd scripts-data
-node cargar_catalogos.js
+# 4. Cargar el schema (BOM workaround usando docker cp)
+docker cp cassandra/schema.cql semapa-cassandra:/tmp/schema.cql
+docker exec semapa-cassandra cqlsh -f /tmp/schema.cql
 
-# 4. Generar datos con la regla 300 L/persona
-node generar_datos.js
-cd ..
+# 5. Verificar que las 25 tablas se crearon
+docker exec semapa-cassandra cqlsh -e "USE semapa; DESC TABLES;"
 
-# 5. Arrancar backend Node
-cd backend
-pnpm start
+# 6. Instalar deps de scripts-data y cargar catálogos
+Set-Location scripts-data
+pnpm install
+pnpm run cargar-catalogos
+# Debe imprimir: 9 errores, 4 gateways, 5 modelos, 9 tarifas, 12 tipos, 15 distritos, 54 zonas
+
+# 7. Cargar DATOS REALES desde CSVs (~5-7 min: 100k contratos, 248k lecturas)
+pnpm run cargar-csvs
+# Imprime progreso: usuarios → contratos → infraestructuras → medidores → lecturas → consumo mensual → preavisos
+Set-Location ..
+
+# 8. Levantar el resto de servicios (backend Node, backend-go, frontend, visor)
+docker compose up -d backend backend-go frontend visor
+
+# 9. Verificar que todos los containers están up
+docker compose ps
 ```
 
-### Validar en Cassandra que los catálogos están bien
+### Abrir los dashboards
+
+| URL | Para qué |
+|---|---|
+| http://localhost:5173/contabilidad | Dashboard 3 (facturación, cartera vencida, preavisos) |
+| http://localhost:5173/administracion | Dashboard 2 errores + lecturas vía app móvil |
+| http://localhost:5173/operacional | Dashboard 2 consumo + medidores |
+| http://localhost:5173/alcaldia | Dashboard 1 (Smart City / ODS) |
+| http://localhost:5174 | Visor de búsqueda |
+| http://localhost:8090/health | Healthcheck backend-go (mobile API) |
+
+### Configurar SMTP para Aviso de Cobranza por email (opcional)
+
+El endpoint `POST /api/mvc/contabilidad/aviso-cobranza` puede enviar emails reales con nodemailer. Sin `.env` usa el fallback hardcodeado en [backend/email.js](backend/email.js); con `.env` usa tus credenciales.
 
 ```powershell
-docker exec -it semapa-cassandra cqlsh -e "SELECT alias,consumo_minimo_m3,cargo_fijo FROM semapa.catalogo_tarifas;"
+# Crear backend/.env (NO subir al repo, ya está en .gitignore)
+@"
+SMTP_USER=tu_correo@gmail.com
+SMTP_PASS=tuapppasswordsinespacios
+SMTP_FROM=SEMAPA Cobranzas <tu_correo@gmail.com>
+"@ | Out-File -Encoding utf8 backend\.env
+
+# Para que el backend (dockerizado) lea ese .env, hay que agregarlo al docker-compose.yml
+# en el servicio "backend":
+#   env_file:
+#     - ./backend/.env
+
+# Luego rebuildear:
+docker compose up -d --build backend
 ```
 
-Debe mostrar `consumo_minimo_m3 = 12` para todas las filas, y `cargo_fijo` con valores entre 16.74 y 145.98 (no los valores pequeños 1.40, 2.78...).
+> **App Password de Gmail:** generar en https://myaccount.google.com/apppasswords (requiere 2FA activado). El valor son 16 letras minúsculas en grupos de 4 — al guardar en `.env`, quita los espacios.
 
-### Probar el endpoint de cálculo
+### Levantar la mobile-app (Expo Go) — fuera de Docker
 
 ```powershell
-# Login
+Set-Location mobile-app
+pnpm install
+npx expo start
+
+# Escanear el QR con la app "Expo Go" en tu teléfono.
+# La app apunta a http://<IP_LAN>:8080 — configurar en mobile-app/.env si es necesario.
+```
+
+---
+
+## Flujo de modificación (cuando ya está corriendo en Docker)
+
+### Modificaste código del backend Node (`backend/src/...`)
+
+```powershell
+# Rebuild solo el container del backend
+docker compose up -d --build backend
+
+# Ver logs si algo falla
+docker compose logs -f backend
+```
+
+### Modificaste código del backend-go (`backend-go/...`)
+
+```powershell
+docker compose up -d --build backend-go
+docker compose logs -f backend-go
+```
+
+### Modificaste el frontend (`frontend/src/...`)
+
+```powershell
+# Vite HMR funciona DENTRO del container — los cambios se ven en tiempo real
+# si el container monta el código como volumen. Si no, rebuild:
+docker compose up -d --build frontend
+```
+
+> **Alternativa para iteración rápida:** sacar el frontend de Docker temporalmente y correrlo local:
+> ```powershell
+> docker compose stop frontend
+> Set-Location frontend
+> pnpm install   # solo la primera vez
+> pnpm dev       # hot-reload nativo en http://localhost:5173
+> ```
+
+### Modificaste el schema Cassandra (`cassandra/schema.cql`)
+
+⚠️ Destructivo si haces `down -v`. Alternativas:
+
+```powershell
+# Opción A — preservar datos: ALTER TABLE manual
+docker exec -it semapa-cassandra cqlsh
+> USE semapa;
+> ALTER TABLE lecturas_por_medidor_mes ADD nueva_columna text;
+
+# Opción B — reset completo (perderás los datos cargados, ~7 min para repoblar)
+docker compose down -v
+# Repetir pasos 2-8 del arranque desde cero
+```
+
+### Modificaste un loader (`scripts-data/cargar_*.js`)
+
+```powershell
+# Truncar selectivamente las tablas afectadas (evita re-arrancar Cassandra)
+docker exec semapa-cassandra cqlsh -e "USE semapa; TRUNCATE consumo_mensual_por_contrato; TRUNCATE notificaciones_por_contrato; TRUNCATE lecturas_por_medidor_mes;"
+
+Set-Location scripts-data
+pnpm run cargar-csvs
+```
+
+### Reiniciar todo sin perder datos
+
+```powershell
+docker compose restart
+# o un servicio específico:
+docker compose restart backend
+```
+
+### Apagar todo (preservando datos)
+
+```powershell
+docker compose stop
+# Los volúmenes y datos se mantienen. Para retomar:
+docker compose start
+```
+
+### Apagar y borrar TODO (incluido el volumen de Cassandra)
+
+```powershell
+docker compose down -v
+```
+
+---
+
+## Validar que el cálculo tarifario sigue correcto
+
+### En Cassandra (catálogo)
+
+```powershell
+docker exec semapa-cassandra cqlsh -e "SELECT alias,consumo_minimo_m3,cargo_fijo FROM semapa.catalogo_tarifas;"
+```
+
+Debe mostrar `consumo_minimo_m3 = 12` para las 9 filas y `cargo_fijo` entre 16.74 y 145.98.
+
+### En la API (cálculo real)
+
+```powershell
+# Login al backend-go (mobile API)
 $body = '{"username":"lector1","password":"lector123"}'
-$login = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/auth/login" -ContentType "application/json" -Body $body
+$login = Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/auth/login" -ContentType "application/json" -Body $body
 $token = $login.accessToken
 
 # Calcular R3 con 25 m³ → debe devolver montoBs: 90.78
 $calc = '{"consumo_m3":25,"tarifa_alias":"R3"}'
-Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/calcular-factura" `
+Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/calcular-factura" `
   -Headers @{Authorization="Bearer $token"} -ContentType "application/json" -Body $calc
 ```
 
-### Probar en AppRegistro
+### En AppRegistro (mobile)
 
 1. Pestaña **Tarifas**
 2. Consumo: `25`
 3. Tarifa: `R3`
 4. Botón **Calcular factura**
 5. Debe abrir un Alert con: `Monto: Bs 90.78 · Categoría: Residencial · Exceso: 13 m³`
+
+---
+
+## Troubleshooting Docker
+
+### "No host could be resolved" al conectarse a Cassandra
+
+El container `backend` espera que `cassandra` esté **healthy**, no solo "up". Si arrancan en paralelo y backend se conecta antes:
+
+```powershell
+docker compose restart backend
+```
+
+### Cassandra no arranca / loop de reinicio
+
+Cassandra 4.1 necesita ~2 GB RAM disponibles. Si Docker Desktop tiene menos:
+- Settings → Resources → aumentar Memory a 4 GB mínimo
+- Reiniciar Docker Desktop
+
+### `cqlsh: Invalid syntax at line 1, char 1`
+
+El archivo `schema.cql` está guardado con BOM (UTF-16 LE). Solución usada en este proyecto:
+
+```powershell
+docker cp cassandra/schema.cql semapa-cassandra:/tmp/schema.cql
+docker exec semapa-cassandra cqlsh -f /tmp/schema.cql
+```
+
+### `pnpm: comando no reconocido` después de instalar Corepack
+
+Cierra y reabre PowerShell. Si persiste, instala con la **Opción B** (standalone).
+
+### El loader `cargar-csvs` falla en la verificación final con timeout
+
+Es esperado: `SELECT COUNT(*) FROM lecturas_por_medidor_mes` sobre 248k filas hace timeout en Cassandra. **Los datos sí se cargaron correctamente.** Verifica con:
+
+```powershell
+docker exec semapa-cassandra cqlsh -e "SELECT periodo, monto_bs, estado_facturacion FROM semapa.consumo_mensual_por_contrato LIMIT 5;"
+```
 
 ---
 

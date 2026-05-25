@@ -1,5 +1,5 @@
 import express from 'express';
-import { getMorosos, sendAvisoCobranza, getIngresosTarifa, getTopConsumidores, getFacturacionPorDistrito, getCarteraVencida, getFacturacionMensual } from '../controllers/contabilidadController.js';
+import { getMorosos, sendAvisoCobranza, getIngresosTarifa, getTopConsumidores, getFacturacionPorDistrito, getCarteraVencida, getFacturacionMensual, getPreavisos } from '../controllers/contabilidadController.js';
 
 const router = express.Router();
 
@@ -8,6 +8,7 @@ router.get('/facturacion-mensual', getFacturacionMensual);
 router.get('/facturacion-por-distrito', getFacturacionPorDistrito);
 router.get('/cartera-vencida', getCarteraVencida);
 router.get('/top-consumidores', getTopConsumidores);
+router.get('/preavisos', getPreavisos);
 
 // Ruta para obtener los deudores más morosos
 router.get('/morosos', getMorosos);

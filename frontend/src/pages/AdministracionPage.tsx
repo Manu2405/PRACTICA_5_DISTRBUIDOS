@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import API from '../api/client';
 import KpiCard from '../components/KpiCard';
-import { AlertTriangle, Cpu, MapPin, Zap, Activity, WifiOff, Battery, Thermometer, Clock, TrendingUp, Shield, Gauge } from 'lucide-react';
+import { AlertTriangle, Cpu, MapPin, Zap, Activity, WifiOff, Battery, Thermometer, Clock, TrendingUp, Shield, Gauge, Smartphone } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Legend, PieChart, Pie } from 'recharts';
 
 const COLORS = ['#ef4444', '#f59e0b', '#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#ec4899', '#f97316', '#a855f7'];
@@ -308,6 +308,7 @@ export default function AdministracionPage() {
   const [periodo, setPeriodo] = useState('2026-04');
   const [errModelo, setErrModelo] = useState<ErrorModelo[]>([]);
   const [errDist, setErrDist] = useState<ErrorDistrito[]>([]);
+  const [lecturasApp, setLecturasApp] = useState<{ total: number; porDistrito: { distrito: string; cantidad: number }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [erroresPorDia] = useState(() =>
     Array.from({ length: 7 }, () => Math.floor(Math.random() * 30) + 10)
@@ -318,14 +319,17 @@ export default function AdministracionPage() {
 
     Promise.all([
       API.get(`/api/administracion/errores-modelo?periodo=${periodo}`).catch(() => ({ data: generarErroresModelo(periodo) })),
-      API.get(`/api/administracion/errores-distrito?periodo=${periodo}`).catch(() => ({ data: generarErroresDistrito(periodo) }))
-    ]).then(([em, ed]) => {
+      API.get(`/api/administracion/errores-distrito?periodo=${periodo}`).catch(() => ({ data: generarErroresDistrito(periodo) })),
+      API.get(`/api/administracion/lecturas-app?periodo=${periodo}`).catch(() => ({ data: { total: 0, porDistrito: [] } })),
+    ]).then(([em, ed, la]) => {
       setErrModelo(em.data || []);
       setErrDist(ed.data || []);
+      setLecturasApp(la.data || { total: 0, porDistrito: [] });
       setLoading(false);
     }).catch(() => {
       setErrModelo(generarErroresModelo(periodo));
       setErrDist(generarErroresDistrito(periodo));
+      setLecturasApp({ total: 0, porDistrito: [] });
       setLoading(false);
     });
   }, [periodo]);
@@ -413,7 +417,48 @@ export default function AdministracionPage() {
           color="cyan"
           sub="Diferentes fallas"
         />
+        <KpiCard
+          label="Lecturas registradas vía app móvil"
+          value={(lecturasApp?.total ?? 0).toLocaleString('es-BO')}
+          icon={<Smartphone size={20} />}
+          color="green"
+          sub={`Obligatorio · ${periodo}`}
+        />
       </div>
+
+      {/* Lecturas registradas por app móvil (Obligatorio PDF Dashboard 2) */}
+      {lecturasApp && lecturasApp.porDistrito.length > 0 && (
+        <div className="chart-card full" style={{ marginBottom: 20 }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Smartphone size={20} color="#10b981" /> Lecturas vía App Móvil por Distrito — Obligatorio
+          </h3>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 16 }}>
+            Cantidad de lecturas registradas manualmente desde la app SEMAPA en el período {periodo}.
+            Se distinguen de las lecturas IoT automáticas por el campo <code>origen='app_movil'</code>.
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={lecturasApp.porDistrito} margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
+              <XAxis dataKey="distrito" tick={{ fill: '#9aa0b8', fontSize: 11 }} angle={-15} textAnchor="end" height={70} />
+              <YAxis tick={{ fill: '#9aa0b8', fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: '#1e2235', border: '1px solid #2a2f45', borderRadius: 8, color: '#e8eaed' }} />
+              <Bar dataKey="cantidad" name="Lecturas app" fill="#10b981" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Estado vacío del KPI lecturas-app */}
+      {lecturasApp && lecturasApp.total === 0 && (
+        <div className="chart-card full" style={{ marginBottom: 20, textAlign: 'center', padding: 30 }}>
+          <Smartphone size={40} color="#10b981" style={{ marginBottom: 8 }} />
+          <h3 style={{ margin: '8px 0' }}>Lecturas registradas vía app móvil — Obligatorio</h3>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            Sin lecturas registradas desde la app SEMAPA en el período <strong>{periodo}</strong>.
+            Las lecturas IoT automáticas no se incluyen — solo las que técnicos suben desde la app móvil
+            (<code>origen='app_movil'</code>).
+          </div>
+        </div>
+      )}
 
       {/* Métricas adicionales */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>

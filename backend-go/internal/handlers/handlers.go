@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"semapa/backend-go/internal/db"
@@ -13,6 +14,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// normalizeMedidorCodigo acepta MAC (XX:XX:XX:XX:XX:XX) o serie (XXXXXXXXXXXX).
+// La serie en Cassandra es la MAC sin ":".
+func normalizeMedidorCodigo(codigo string) string {
+	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(codigo)), ":", "")
+}
 
 func Health(c *gin.Context) {
 	s := db.Session()
@@ -88,7 +95,7 @@ func ListMedidores(c *gin.Context) {
 }
 
 func GetMedidor(c *gin.Context) {
-	codigo := c.Param("codigo")
+	codigo := normalizeMedidorCodigo(c.Param("codigo"))
 	s := db.Session()
 	if s == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "DB no disponible"})
@@ -106,22 +113,32 @@ func GetMedidor(c *gin.Context) {
 	}
 	periodo := c.DefaultQuery("periodo", time.Now().Format("2006-01"))
 	var fh time.Time
-	var lectura float32
-	var lecturas []float32
+	var lecM3, lecActual, lecAnterior float32
+	type lectRow struct {
+		fh                      time.Time
+		lecM3, lecAct, lecAnter float32
+	}
+	var lecturas []lectRow
 	iter := s.Query(
-		"SELECT fecha_hora, lectura_m3 FROM lecturas_por_medidor_mes WHERE numero_serie = ? AND periodo = ?",
+		"SELECT fecha_hora, lectura_m3, lectura_actual_m3, lectura_anterior_m3 FROM lecturas_por_medidor_mes WHERE numero_serie = ? AND periodo = ?",
 		codigo, periodo,
 	).Iter()
-	for iter.Scan(&fh, &lectura) {
-		lecturas = append(lecturas, lectura)
+	for iter.Scan(&fh, &lecM3, &lecActual, &lecAnterior) {
+		lecturas = append(lecturas, lectRow{fh, lecM3, lecActual, lecAnterior})
 	}
 	_ = iter.Close()
 	actual, anterior := float64(0), float64(0)
 	if len(lecturas) > 0 {
-		actual = float64(lecturas[0])
-	}
-	if len(lecturas) > 1 {
-		anterior = float64(lecturas[1])
+		// Si hay lectura_actual_m3 (datos del CSV) la priorizamos; sino, usar lectura_m3
+		if lecturas[0].lecAct > 0 {
+			actual = float64(lecturas[0].lecAct)
+			anterior = float64(lecturas[0].lecAnter)
+		} else {
+			actual = float64(lecturas[0].lecM3)
+			if len(lecturas) > 1 {
+				anterior = float64(lecturas[1].lecM3)
+			}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"codigo": serie, "numeroSerie": serie, "mac": mac, "modelo": modelo, "estado": estado,
@@ -134,15 +151,17 @@ func GetMedidor(c *gin.Context) {
 
 func RegistrarLectura(c *gin.Context) {
 	var body struct {
-		CodigoMedidor string  `json:"codigo_medidor"`
-		LecturaM3     float64 `json:"lectura_m3"`
-		Observaciones string  `json:"observaciones"`
-		Lat           float64 `json:"lat"`
-		Lon           float64 `json:"lon"`
-		FechaHora     string  `json:"fecha_hora"`
+		CodigoMedidor    string  `json:"codigo_medidor"`
+		LecturaM3        float64 `json:"lectura_m3"`
+		LecturaActualM3  float64 `json:"lectura_actual_m3"`
+		LecturaAnteriorM3 float64 `json:"lectura_anterior_m3"`
+		Observaciones    string  `json:"observaciones"`
+		Lat              float64 `json:"lat"`
+		Lon              float64 `json:"lon"`
+		FechaHora        string  `json:"fecha_hora"`
 	}
 	if c.BindJSON(&body) != nil || body.CodigoMedidor == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "codigo_medidor y lectura_m3 requeridos"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "codigo_medidor requerido"})
 		return
 	}
 	s := db.Session()
@@ -150,10 +169,11 @@ func RegistrarLectura(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "DB no disponible"})
 		return
 	}
+	codigo := normalizeMedidorCodigo(body.CodigoMedidor)
 	var mac, radiobase, distrito, zona string
 	err := s.Query(
 		"SELECT mac, radiobase, distrito, zona FROM medidores_por_serie WHERE numero_serie = ?",
-		body.CodigoMedidor,
+		codigo,
 	).Scan(&mac, &radiobase, &distrito, &zona)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Medidor no encontrado"})
@@ -168,11 +188,21 @@ func RegistrarLectura(c *gin.Context) {
 	periodo := ts.Format("2006-01")
 	desc := body.Observaciones
 	if desc == "" {
-		desc = "Lectura campo AppRegistro"
+		desc = "Lectura manual via AppRegistro"
+	}
+	// Si vienen lectura_actual_m3 + lectura_anterior_m3, usar el diferencial; si no, usar lectura_m3.
+	lecAct := body.LecturaActualM3
+	lecAnt := body.LecturaAnteriorM3
+	consumoM3 := body.LecturaM3
+	if lecAct > 0 || lecAnt > 0 {
+		consumoM3 = lecAct - lecAnt
+		if consumoM3 < 0 {
+			consumoM3 = 0
+		}
 	}
 	if err := s.Query(
-		`INSERT INTO lecturas_por_medidor_mes (numero_serie, periodo, fecha_hora, mac, radiobase, lectura_m3, lectura_litros, status, descripcion_status, distrito, zona) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		body.CodigoMedidor, periodo, ts, mac, radiobase, body.LecturaM3, body.LecturaM3*1000, 0, desc, distrito, zona,
+		`INSERT INTO lecturas_por_medidor_mes (numero_serie, periodo, fecha_hora, mac, radiobase, lectura_m3, lectura_litros, lectura_anterior_m3, lectura_actual_m3, status, descripcion_status, distrito, zona, origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		codigo, periodo, ts, mac, radiobase, consumoM3, consumoM3*1000, lecAnt, lecAct, 1, desc, distrito, zona, "app_movil",
 	).Exec(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -183,8 +213,10 @@ func RegistrarLectura(c *gin.Context) {
 		user = cl.Username
 	}
 	c.JSON(http.StatusCreated, gin.H{
-		"ok": true, "codigo_medidor": body.CodigoMedidor, "periodo": periodo,
-		"fecha_hora": ts.Format(time.RFC3339), "lectura_m3": body.LecturaM3, "usuario": user,
+		"ok": true, "codigo_medidor": codigo, "mac": mac, "periodo": periodo,
+		"fecha_hora": ts.Format(time.RFC3339), "consumo_m3": consumoM3,
+		"lectura_anterior_m3": lecAnt, "lectura_actual_m3": lecAct,
+		"usuario": user, "origen": "app_movil",
 	})
 }
 

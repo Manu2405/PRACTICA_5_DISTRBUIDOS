@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import API from '../api/client';
 import KpiCard from '../components/KpiCard';
-import { DollarSign, TrendingUp, Users, AlertTriangle, Send, MapPin, Clock, CalendarClock, BarChart3 } from 'lucide-react';
+import { DollarSign, TrendingUp, Users, AlertTriangle, Send, MapPin, Clock, CalendarClock, BarChart3, Mail, MessageSquare, Smartphone } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, LabelList, ComposedChart, Line, CartesianGrid } from 'recharts';
 
 const COLORS = ['#3b82f6','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316'];
@@ -13,6 +13,7 @@ export default function ContabilidadPage() {
   const [factDistrito, setFactDistrito] = useState<any[]>([]);
   const [cartera, setCartera] = useState<any>(null);
   const [factMensual, setFactMensual] = useState<any[]>([]);
+  const [preavisos, setPreavisos] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,12 +24,14 @@ export default function ContabilidadPage() {
       API.get(`/api/mvc/contabilidad/facturacion-por-distrito?periodo=${periodo}`),
       API.get(`/api/mvc/contabilidad/cartera-vencida?periodo=${periodo}`),
       API.get(`/api/mvc/contabilidad/facturacion-mensual`),
-    ]).then(([t, m, fd, cv, fm]) => {
+      API.get(`/api/mvc/contabilidad/preavisos?periodo=${periodo}`),
+    ]).then(([t, m, fd, cv, fm, pa]) => {
       setTarifas(t.data || []);
       setMorosos(m.data || []);
       setFactDistrito(fd.data || []);
       setCartera(cv.data || null);
       setFactMensual(fm.data || []);
+      setPreavisos(pa.data || null);
     }).catch(err => {
       console.warn("Usando datos simulados (Backend no disponible):", err.message);
       setTarifas([
@@ -66,16 +69,34 @@ export default function ContabilidadPage() {
         { periodo: '2026-03', montoBs: 1245700.00, consumoM3: 82300, contratos: 9450, ticketPromedio: 131.82, variacionPct: 5.5 },
         { periodo: '2026-04', montoBs: 1325200.00, consumoM3: 87100, contratos: 9620, ticketPromedio: 137.75, variacionPct: 6.4 },
       ]);
+      setPreavisos({
+        periodo, total: 1450, tasaEntregaPct: 87.2,
+        porCanal: [
+          { canal: 'email',    total: 620, entregado: 558, enviado: 40, fallido: 22, tasaEntrega: 90.0 },
+          { canal: 'sms',      total: 480, entregado: 420, enviado: 35, fallido: 25, tasaEntrega: 87.5 },
+          { canal: 'whatsapp', total: 350, entregado: 286, enviado: 40, fallido: 24, tasaEntrega: 81.7 },
+        ],
+        porEstado: { entregado: 1264, enviado: 115, fallido: 71 },
+      });
     }).finally(() => setLoading(false));
   }, [periodo]);
 
   const enviarAvisoCobranza = (m: any) => {
+    const email = prompt(`Email del cliente ${m.nombre} (contrato ${m.contrato})\nSe enviará aviso de cobranza por Bs ${m.deudaTotalBs}:`);
+    if (!email) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      alert('Email inválido');
+      return;
+    }
     API.post('/api/mvc/contabilidad/aviso-cobranza', {
       contrato: m.contrato,
       nombre: m.nombre,
-      deudaTotalBs: m.deudaTotalBs
+      deudaTotalBs: m.deudaTotalBs,
+      email,
+      mesesAtraso: m.mesesAtraso,
     }).then(res => {
-      alert(`Backend Responde: ${res.data.mensaje}\nCanales Utilizados: ${res.data.canales.join(', ')}`);
+      const ok = res.data.estado === 'enviado_email';
+      alert(`${ok ? '✅ Email enviado a ' + email : '⚠️ ' + res.data.estado}\n\n${res.data.mensaje}`);
     }).catch(err => {
       alert("Error al enviar el aviso: " + err.message);
     });
@@ -295,6 +316,79 @@ export default function ContabilidadPage() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Preavisos emitidos (Obligatorio PDF Dashboard 3) */}
+      {preavisos && (
+        <div className="chart-card full" style={{ marginBottom: 20 }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Send size={20} color="#8b5cf6" /> Preavisos Emitidos — Obligatorio
+          </h3>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 16 }}>
+            Notificaciones de cobranza preventiva enviadas en el período {periodo} por canal (email, SMS, WhatsApp).
+            Tasa de entrega global: <strong style={{ color: '#10b981' }}>{preavisos.tasaEntregaPct}%</strong>.
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
+            <div style={{ background: 'linear-gradient(135deg, #8b5cf622, #8b5cf611)', border: '1px solid #8b5cf644', borderRadius: 12, padding: 18 }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: 4 }}>TOTAL EMITIDOS</div>
+              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#8b5cf6' }}>{preavisos.total.toLocaleString('es-BO')}</div>
+            </div>
+            <div style={{ background: '#10b98115', borderLeft: '4px solid #10b981', borderRadius: 8, padding: 18 }}>
+              <div style={{ color: '#10b981', fontWeight: 'bold', fontSize: '0.85rem' }}>ENTREGADOS</div>
+              <div style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: '4px 0' }}>{preavisos.porEstado.entregado.toLocaleString('es-BO')}</div>
+            </div>
+            <div style={{ background: '#f59e0b15', borderLeft: '4px solid #f59e0b', borderRadius: 8, padding: 18 }}>
+              <div style={{ color: '#f59e0b', fontWeight: 'bold', fontSize: '0.85rem' }}>ENVIADOS</div>
+              <div style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: '4px 0' }}>{preavisos.porEstado.enviado.toLocaleString('es-BO')}</div>
+            </div>
+            <div style={{ background: '#ef444415', borderLeft: '4px solid #ef4444', borderRadius: 8, padding: 18 }}>
+              <div style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '0.85rem' }}>FALLIDOS</div>
+              <div style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: '4px 0' }}>{preavisos.porEstado.fallido.toLocaleString('es-BO')}</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20 }}>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={preavisos.porCanal} margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2f45" />
+                <XAxis dataKey="canal" tick={{ fill: '#9aa0b8', fontSize: 12 }} />
+                <YAxis tick={{ fill: '#9aa0b8', fontSize: 11 }} />
+                <Tooltip contentStyle={{ background: '#1e2235', border: '1px solid #2a2f45', borderRadius: 8, color: '#e8eaed' }} />
+                <Legend />
+                <Bar dataKey="entregado" stackId="a" name="Entregado" fill="#10b981" />
+                <Bar dataKey="enviado" stackId="a" name="Enviado" fill="#f59e0b" />
+                <Bar dataKey="fallido" stackId="a" name="Fallido" fill="#ef4444" />
+              </BarChart>
+            </ResponsiveContainer>
+
+            <table className="data-table" style={{ width: '100%' }}>
+              <thead>
+                <tr>
+                  <th>Canal</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
+                  <th style={{ textAlign: 'right' }}>Tasa entrega</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preavisos.porCanal.map((c: any, i: number) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {c.canal === 'email' && <Mail size={14} color="#3b82f6" />}
+                      {c.canal === 'sms' && <Smartphone size={14} color="#10b981" />}
+                      {c.canal === 'whatsapp' && <MessageSquare size={14} color="#25D366" />}
+                      {c.canal.toUpperCase()}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{c.total.toLocaleString('es-BO')}</td>
+                    <td style={{ textAlign: 'right', color: c.tasaEntrega >= 85 ? '#10b981' : c.tasaEntrega >= 70 ? '#f59e0b' : '#ef4444', fontWeight: 'bold' }}>
+                      {c.tasaEntrega}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
