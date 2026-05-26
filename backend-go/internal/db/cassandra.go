@@ -30,10 +30,14 @@ func Init() error {
 		keyspace = "semapa"
 	}
 
-	cluster := gocql.NewCluster(host)
+	hosts := strings.Split(host, ",")
+	for i := range hosts {
+		hosts[i] = strings.TrimSpace(hosts[i])
+	}
+	cluster := gocql.NewCluster(hosts...)
 	cluster.Port = port
 	cluster.Keyspace = keyspace
-	cluster.Consistency = gocql.Quorum
+	cluster.Consistency = gocql.LocalOne
 
 	s, err := cluster.CreateSession()
 	if err != nil {

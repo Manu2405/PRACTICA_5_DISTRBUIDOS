@@ -1,551 +1,692 @@
-# readmeDevon — Correcciones de cálculo tarifario y regla 300 L/persona
+# readmeDevon — Informe completo SEMAPA Práctica 5
 
+**Última actualización:** 2026-05-26
+**Rama:** `devDevonA`
 **Autor:** Devon
-**Rama:** `devLucas` (los cambios se aplicaron sobre esta rama)
-**Fecha:** 2026-05-19
-**Alcance:** AppRegistro (mobile-app) + scripts de carga/generación de datos
+**Repositorio:** https://github.com/Manu2405/PRACTICA_5_DISTRBUIDOS
 
 ---
 
 ## Resumen ejecutivo
 
-Se corrigieron **bugs críticos en el cálculo del cobro** de SEMAPA que afectaban tanto al backend como a AppRegistro, y se aplicó la **regla de 300 litros por habitante/día** en el generador de datos. También se unificó la URL de la API en la app móvil para evitar inconsistencias entre archivos de configuración.
-
-### Lo que estaba mal (antes)
-
-1. El cargador de catálogos interpretaba mal dos columnas del CSV de tarifas: tomaba el monto total como m³ y el precio unitario como cargo fijo.
-2. El cálculo agregado del monto mensual en el generador usaba una fórmula lineal simplificada que ignoraba los bloques progresivos del reglamento.
-3. El generador de lecturas usaba valores aleatorios sin relación con la realidad (`randomFloat(0, 1300)` litros por franja), produciendo consumos arbitrarios.
-4. La URL de la API móvil estaba apuntada a 3 puertos distintos en 3 archivos diferentes.
-
-### Lo que está bien (ahora)
-
-1. `catalogo_tarifas` se carga con `consumo_minimo_m3 = 12` fijo para todas las categorías (según el reglamento) y `cargo_fijo` con el monto total real.
-2. El cálculo agregado mensual usa el mismo `tarifaService.js` que el backend, respetando bloques progresivos.
-3. Las lecturas diarias se calibran sobre la regla `300 L × habitantes_típicos_por_categoría`.
-4. Toda la mobile-app apunta a `:8080` (Node, ya completo).
+Sistema distribuido para SEMAPA Cochabamba con:
+- **Cassandra** (Docker) con 25 tablas + índice secundario, 100 k contratos / 248 k lecturas reales del CSV cargados
+- **Backend Node** (puerto 8080) — dashboards + 25 consultas + visor + preavisos + email real
+- **Backend Go** (puerto 8090) — API móvil con `origen='app_movil'` en lecturas
+- **Frontend React** (puerto 5173) — 6 dashboards funcionando
+- **Visor totem** (puerto 5174) — búsqueda por contrato / CI / MAC + pago + email
+- **Mobile-app Expo Go** — registro de lecturas con máscara MAC
+- **Documentos de defensa:** `CONSULTAS.md`, `CONSULTAS_DOCKER.md`, `DocP/HISTORIAL.md`
 
 ---
 
-## Problemas identificados y corregidos
+# 📦 PARTE 1 — Levantar el proyecto desde cero
 
-### Bug 1 — Mapeo incorrecto del CSV Tarifario
+## 1.1 Pre-requisitos (instalación una sola vez)
 
-El CSV `Recursos/Recursos Practica 5 - Tarifario.csv` tiene dos columnas redundantes bajo el título "Fijo (12 m3/mes)":
-
-```
-fila 0:  .  .  Fijo (12 m3/mes)  .       .     .     .     ...
-fila 1:  .  .  m3/mes            $us/mes 13-25 26-50 51-75 ...
-fila 2:  .  R1 16.74             1.40    1.10  1.26  1.87  ...
-fila 3:  .  R2 33.37             2.78    1.78  1.98  2.96  ...
-fila 4:  .  R3 62.57             5.21    2.17  3.38  3.76  ...
-```
-
-- `row[2]` (16.74, 33.37, 62.57...) = **monto total** que se paga por los primeros 12 m³.
-- `row[3]` (1.40, 2.78, 5.21...) = el **mismo monto pero por m³** (redundante: `row[2] / 12`).
-- `row[4]` en adelante = precios por m³ de los bloques progresivos (13-25, 26-50, etc.).
-
-**Verificación**: 16.74 / 12 = 1.395 ≈ 1.40; 62.57 / 12 = 5.214 ≈ 5.21.
-
-El código viejo tomaba `row[2]` como m³ (consumo mínimo) y `row[3]` como cargo fijo, lo cual estaba conceptualmente invertido.
-
-### Bug 2 — Cálculo agregado mensual ignoraba bloques progresivos
-
-En `scripts-data/generar_datos.js`, el cálculo del `monto_bs` para `consumo_mensual_por_contrato` era:
-
-```javascript
-let monto = cargo_fijo;
-if (consumo > consumo_minimo) {
-  monto += (consumo - consumo_minimo) * rango_26_50;
-}
-```
-
-Esto aplicaba el precio del bloque 26-50 a TODO el exceso, incluso si el consumo era 25 m³ (que debería usar solo el bloque 13-25) o 100 m³ (que debería usar 13-25, 26-50, 51-75 y 76-100 progresivamente).
-
-### Bug 3 — Lecturas con valores arbitrarios
-
-El loop de franjas usaba `randomFloat(0, 1300)` litros por franja diaria, sin relación con la categoría tarifaria ni con habitantes. Una vivienda R1 (sin habitantes) podía generar 800 m³/mes (industria).
-
-### Bug 4 — URL móvil inconsistente
-
-- `mobile-app/app.json` → puerto 8090 (backend-go, incompleto)
-- `mobile-app/.env.example` → puerto 8080 (Node, ok)
-- `mobile-app/src/config/api.ts` → fallback 8080
-
-Si el desarrollador olvidaba crear `.env`, la app levantaba con la URL de `app.json` y apuntaba a Go, que aún no tiene todos los endpoints.
-
----
-
-## Cambios por archivo
-
-### 1. `scripts-data/cargar_catalogos.js`
-
-**Función afectada:** `cargarTarifario()`, líneas ~150-175.
-
-```diff
-- const consumo_minimo = toDecimal(row[2]);   // 16.74, 33.37... tomados como m³ (MAL)
-- const cargo_fijo = toDecimal(row[3]);       // 1.40, 2.78... tomados como monto (MAL)
-+ // Reglamento SEMAPA Art.4: los primeros 12 m³ son fijos para todas las categorías.
-+ // CSV col[2] (16.74, 33.37, ...) = monto TOTAL por esos 12 m³ → cargo_fijo.
-+ // CSV col[3] (1.40, 2.78, ...) es redundante (= col[2]/12), se ignora.
-+ const consumo_minimo = 12;
-+ const cargo_fijo = toDecimal(row[2]);
-```
-
-**Resultado en Cassandra (`catalogo_tarifas`):**
-
-| alias | consumo_minimo_m3 | cargo_fijo |
+| Software | Para qué | Cómo |
 |---|---|---|
-| R1 | 12 | 16.74 |
-| R2 | 12 | 33.37 |
-| R3 | 12 | 62.57 |
-| R4 | 12 | 104.22 |
-| C  | 12 | 125.16 |
-| CE | 12 | 145.98 |
-| I  | 12 | 112.64 |
-| P  | 12 | 54.96 |
-| S  | 12 | 91.72 |
+| **Docker Desktop** | Correr Cassandra (+ opcional backend-go, frontend, visor) | https://docker.com/products/docker-desktop |
+| **Node.js ≥ 20** | Para correr backend Node, scripts-data, expo, frontend local | https://nodejs.org |
+| **pnpm** | Gestor de paquetes (corepack viene con Node 20+) | Ver "Instalar pnpm" abajo |
 
-### 2. `scripts-data/generar_datos.js`
+### Instalar pnpm (Corepack — método recomendado)
 
-#### Cambio 2a — Import del servicio de tarifa real
-
-```diff
-+ import { calcularMontoPorConsumo } from '../backend/src/services/tarifaService.js';
-```
-
-#### Cambio 2b — Constante de la regla SEMAPA
-
-```diff
-+ // Regla de negocio SEMAPA: consumo teórico de 300 L/habitante/día.
-+ const LITROS_POR_HABITANTE_DIA = 300;
-```
-
-#### Cambio 2c — Tabla de habitantes típicos por categoría
-
-Reemplaza el cálculo previo basado en habitantes por zona (que daba números absurdos porque dividía la población de una subalcaldía entera entre los pocos medidores generados):
-
-```javascript
-// Cada medidor = 1 vivienda. Habitantes típicos según Reglamento Art.4:
-//   R1 (lotes baldíos, casas en litigio sin habitantes) → 1 persona
-//   R2 (viviendas precarias 1-2 habitaciones)           → 2 personas
-//   R3 (viviendas funcionales de 1 planta)              → 4 personas
-//   R4 (viviendas multi-piso con todas las dependencias)→ 5 personas
-const HABITANTES_TIPICOS = { R1: 1, R2: 2, R3: 4, R4: 5 };
-
-// Consumo no-residencial por categoría (L/día base, antes de variabilidad)
-const LITROS_DIA_NO_RESID = {
-  C:  3000,  // comercial
-  CE: 6000,  // comercial especial
-  I:  5000,  // industrial
-  P:  1500,  // preferencial
-  S:  2500,  // social
-};
-
-function litrosDiaMedidor(tarifa) {
-  if (HABITANTES_TIPICOS[tarifa] !== undefined) {
-    return HABITANTES_TIPICOS[tarifa] * LITROS_POR_HABITANTE_DIA;
-  }
-  return LITROS_DIA_NO_RESID[tarifa] || 800;
-}
-```
-
-#### Cambio 2d — Loop de generación de lecturas calibrado
-
-```diff
-+ const litrosDiaObjetivo = litrosDiaMedidor(med.tarifa);
-
-  for (let dia = 1; dia <= diasEnMes; dia++) {
-+   const factorDia = randomFloat(0.7, 1.3);     // variabilidad diaria ±30%
-+   const litrosDia = litrosDiaObjetivo * factorDia;
-    const franjas = [
--     { hora: randomInt(0,7), max: 1300 },
--     { hora: randomInt(8,15), max: 380 },
--     { hora: randomInt(16,23), max: 190 },
-+     { hora: randomInt(0,7),   share: 0.20 },   // 20% madrugada
-+     { hora: randomInt(8,15),  share: 0.50 },   // 50% mañana
-+     { hora: randomInt(16,23), share: 0.30 },   // 30% tarde/noche
-    ];
-    for (const fr of franjas) {
--     let litros = ['R1','R2','R3','R4'].includes(med.tarifa)
--       ? randomFloat(0, fr.max) : randomFloat(0, 250);
-+     let litros = litrosDia * fr.share * randomFloat(0.8, 1.2);  // ±20% por franja
-      ...
-    }
-  }
-```
-
-#### Cambio 2e — Cálculo del monto agregado mensual
-
-```diff
-- let monto = tarifa ? parseFloat(tarifa.cargo_fijo || 0) : 0;
-- if (tarifa && data.consumo > parseFloat(tarifa.consumo_minimo_m3 || 0)) {
--   monto += (data.consumo - parseFloat(tarifa.consumo_minimo_m3 || 0)) * parseFloat(tarifa.rango_26_50 || 2);
-- }
-+ // Usar el mismo servicio que el backend para respetar bloques progresivos.
-+ const monto = tarifa
-+   ? calcularMontoPorConsumo(data.consumo, tarifa).montoBs
-+   : 0;
-```
-
-### 3. `mobile-app/app.json`
-
-```diff
-- "apiUrl": "http://192.168.1.100:8090/api"
-+ "apiUrl": "http://192.168.1.100:8080/api"
-```
-
-### 4. `mobile-app/src/config/api.ts`
-
-Solo se actualizó el comentario para reflejar que Node (`:8080`) es el default oficial mientras Go esté incompleto. El `fallback` ya era `:8080`.
-
----
-
-## Lo que NO se tocó (intencionalmente)
-
-- **`backend/src/services/tarifaService.js`** y **`backend-go/internal/services/tarifa.go`** — la lógica de bloques progresivos ya estaba bien escrita; el bug eran los datos que recibía, no el cálculo.
-- **Moneda** — el sistema sigue almacenando `moneda='USD'` en `catalogo_tarifas` y respondiendo `montoBs` en las APIs. Si en algún momento se decide aclarar moneda real (Bs vs USD), es otra tarea separada.
-- **`mobile-app/app/(tabs)/facturacion.tsx`** — se conserva el `Alert` que ya estaba; no se agregó vista de detalle de bloques (pedido del usuario).
-- **`cassandra/schema.cql`** — no se modifica nunca (restricción del proyecto).
-
----
-
-## Verificación de cobro correcto (trace manual)
-
-Con los datos nuevos correctamente cargados, los siguientes casos deben dar estos resultados desde el endpoint `POST /api/calcular-factura`:
-
-| Tarifa | Consumo (m³) | Cálculo | Monto |
-|---|---|---|---|
-| R1 | 10 (≤12) | solo cargo fijo | **Bs 16.74** |
-| R3 | 25 | 62.57 + 13 × 2.17 | **Bs 90.78** |
-| R4 | 60 | 104.22 + 13×2.58 + 25×2.80 + 10×4.39 | **Bs 251.66** |
-| CE | 200 | 145.98 + bloques completos | **Bs ≈ 1.952** |
-
-Casos típicos según la regla 300 L/persona:
-
-| Categoría | Hab. | L/día base | m³/mes prom. | Factura mensual aprox. |
-|---|---|---|---|---|
-| R1 | 1 | 300 | ~9 | ~16.74 (cargo fijo solo) |
-| R2 | 2 | 600 | ~18 | ~44.05 |
-| R3 | 4 | 1.200 | ~36 | ~127.96 |
-| R4 | 5 | 1.500 | ~45 | ~193.76 |
-
----
-
-## Cómo levantar el proyecto con Docker (de cero)
-
-El proyecto está completamente dockerizado en [docker-compose.yml](docker-compose.yml). Los servicios definidos son:
-
-| Servicio | Puerto | Imagen / Build | Notas |
-|---|---|---|---|
-| `cassandra` | 9042 | `cassandra:4.1` | Base de datos NoSQL — siempre en Docker |
-| `backend` | 8080 | `./backend` | API Node/Express MVC (dashboards) |
-| `backend-go` | 8090 | `./backend-go` | API Go (mobile-app AppRegistro) |
-| `frontend` | 5173 | `./frontend` | React + Vite (3 dashboards) |
-| `visor` | 5174 | `./visor` | Visor de búsqueda |
-
-El `mobile-app` (Expo Go) NO está en Docker — se corre con `npx expo start` en local.
-
-### Pre-requisitos en la máquina anfitriona
-
-| Herramienta | Para qué | Cómo instalar |
-|---|---|---|
-| **Docker Desktop** | Correr los containers | https://docker.com/products/docker-desktop |
-| **Node.js ≥ 20** | Solo para `scripts-data` y `mobile-app` (no para servicios dockerizados) | https://nodejs.org |
-| **pnpm** | Gestor de paquetes (más rápido que npm) | Ver "Instalar pnpm" abajo |
-
-#### Instalar pnpm (si no lo tienes)
-
+PowerShell **como Administrador**:
 ```powershell
-# Opción A — Corepack (recomendada, viene con Node 16.13+)
-# Abrir PowerShell como Administrador:
 corepack enable
 corepack prepare pnpm@latest --activate
+pnpm -v   # debe imprimir 9.x o superior
+```
 
-# Opción B — Standalone (sin admin)
+Si Corepack falla por permisos, alternativa sin admin:
+```powershell
 iwr https://get.pnpm.io/install.ps1 -useb | iex
 # Cierra y reabre PowerShell
-
-# Verificar
-pnpm -v   # debe imprimir 9.x o 10.x
+pnpm -v
 ```
 
-### Arranque desde cero (flujo completo, ~7 minutos)
+## 1.2 Instalar dependencias de cada subproyecto
+
+⚠️ **Cada subproyecto tiene su propio `package.json`**. Hay que correr `pnpm install` en CADA uno.
 
 ```powershell
-# 1. Limpiar Docker (borra datos previos)
-docker compose down -v
+# Desde la raíz del proyecto:
 
-# 2. Levantar SOLO Cassandra primero (los otros servicios dependen de ella)
-docker compose up -d cassandra
-
-# 3. Esperar a que esté saludable (~60-90 seg)
-# Repite hasta que diga "healthy":
-docker inspect -f '{{.State.Health.Status}}' semapa-cassandra
-
-# 4. Cargar el schema (BOM workaround usando docker cp)
-docker cp cassandra/schema.cql semapa-cassandra:/tmp/schema.cql
-docker exec semapa-cassandra cqlsh -f /tmp/schema.cql
-
-# 5. Verificar que las 25 tablas se crearon
-docker exec semapa-cassandra cqlsh -e "USE semapa; DESC TABLES;"
-
-# 6. Instalar deps de scripts-data y cargar catálogos
-Set-Location scripts-data
+# 1) Backend Node
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\backend"
 pnpm install
-pnpm run cargar-catalogos
-# Debe imprimir: 9 errores, 4 gateways, 5 modelos, 9 tarifas, 12 tipos, 15 distritos, 54 zonas
 
-# 7. Cargar DATOS REALES desde CSVs (~5-7 min: 100k contratos, 248k lecturas)
-pnpm run cargar-csvs
-# Imprime progreso: usuarios → contratos → infraestructuras → medidores → lecturas → consumo mensual → preavisos
-Set-Location ..
+# 2) Frontend (dashboards)
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\frontend"
+pnpm install
 
-# 8. Levantar el resto de servicios (backend Node, backend-go, frontend, visor)
-docker compose up -d backend backend-go frontend visor
+# 3) Visor (totem ciudadano)
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\visor"
+pnpm approve-builds   # ⚠️ marca esbuild con espacio + Enter + 'y'
+pnpm install
 
-# 9. Verificar que todos los containers están up
-docker compose ps
+# 4) Scripts de carga de datos
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\scripts-data"
+pnpm install
+
+# 5) Mobile-app (Expo)
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\mobile-app"
+pnpm install
+# Si Expo falla por modules, agregar:
+pnpm add react-native-css-interop
 ```
 
-### Abrir los dashboards
+> 🔑 **Visor requiere `pnpm approve-builds`** — pnpm 11 bloquea scripts de instalación de paquetes por seguridad. Esbuild (que usa Vite) necesita ese permiso para compilar binarios nativos. Aparece menú interactivo, selecciona `esbuild` con espacio, Enter para confirmar, 'y' para aprobar.
 
-| URL | Para qué |
-|---|---|
-| http://localhost:5173/contabilidad | Dashboard 3 (facturación, cartera vencida, preavisos) |
-| http://localhost:5173/administracion | Dashboard 2 errores + lecturas vía app móvil |
-| http://localhost:5173/operacional | Dashboard 2 consumo + medidores |
-| http://localhost:5173/alcaldia | Dashboard 1 (Smart City / ODS) |
-| http://localhost:5174 | Visor de búsqueda |
-| http://localhost:8090/health | Healthcheck backend-go (mobile API) |
+## 1.3 Configurar archivos `.env` (una sola vez)
 
-### Configurar SMTP para Aviso de Cobranza por email (opcional)
+### `backend/.env`
 
-El endpoint `POST /api/mvc/contabilidad/aviso-cobranza` puede enviar emails reales con nodemailer. Sin `.env` usa el fallback hardcodeado en [backend/email.js](backend/email.js); con `.env` usa tus credenciales.
-
-```powershell
-# Crear backend/.env (NO subir al repo, ya está en .gitignore)
-@"
+Contenido exacto (sin nada más):
+```
+CASSANDRA_HOST=localhost
 SMTP_USER=tu_correo@gmail.com
 SMTP_PASS=tuapppasswordsinespacios
 SMTP_FROM=SEMAPA Cobranzas <tu_correo@gmail.com>
-"@ | Out-File -Encoding utf8 backend\.env
-
-# Para que el backend (dockerizado) lea ese .env, hay que agregarlo al docker-compose.yml
-# en el servicio "backend":
-#   env_file:
-#     - ./backend/.env
-
-# Luego rebuildear:
-docker compose up -d --build backend
 ```
 
-> **App Password de Gmail:** generar en https://myaccount.google.com/apppasswords (requiere 2FA activado). El valor son 16 letras minúsculas en grupos de 4 — al guardar en `.env`, quita los espacios.
+> Para SMTP_PASS necesitas una **App Password** de Gmail (no tu contraseña normal). Genérala en https://myaccount.google.com/apppasswords con 2FA activado.
 
-### Levantar la mobile-app (Expo Go) — fuera de Docker
+### `mobile-app/.env`
 
+Contenido (cambia la IP a la de tu PC en la red local):
+```
+EXPO_PUBLIC_API_URL=http://192.168.137.1:8080/api
+```
+
+> Si usas tu hotspot de Windows, la IP siempre es `192.168.137.1`. Si usas WiFi compartida, corre `ipconfig` para ver tu IPv4.
+
+### `.gitignore` ya cubre `.env` recursivamente
+Los `.env` NO se suben al repo automáticamente.
+
+## 1.4 Levantar Cassandra en Docker
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS"
+
+# Limpieza inicial (si tenías algo anterior)
+docker compose down -v
+
+# Levantar SOLO Cassandra (sin levantar backend/frontend dockerizados)
+docker compose up -d cassandra
+
+# Esperar ~90 seg hasta que esté healthy
+docker inspect -f '{{.State.Health.Status}}' semapa-cassandra
+# Repite el comando hasta que diga: healthy
+```
+
+## 1.5 Cargar el schema Cassandra (25 tablas)
+
+⚠️ El archivo `schema.cql` tiene BOM UTF-8 — hay que copiarlo al container con `docker cp` antes de ejecutarlo:
+
+```powershell
+docker cp cassandra/schema.cql semapa-cassandra:/tmp/schema.cql
+docker exec semapa-cassandra cqlsh -f /tmp/schema.cql
+
+# Verificar que se crearon las 25 tablas
+docker exec semapa-cassandra cqlsh -e "USE semapa; DESC TABLES;"
+```
+
+## 1.6 Cargar catálogos (rápido, ~5 segundos)
+
+Datos pequeños: distritos, tarifas, modelos de medidor, errores IoT, gateways.
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\scripts-data"
+pnpm run cargar-catalogos
+# Espera mensajes de "✅" para cada tabla
+```
+
+## 1.7 Cargar los datos REALES desde los CSVs (~5-8 min)
+
+100 k contratos + 80 k infraestructuras + 120 k medidores + 248 k lecturas:
+
+```powershell
+pnpm run cargar-csvs
+# Tarda 5-8 minutos. Va imprimiendo progreso "contratos: 50000/100000"...
+```
+
+> ⚠️ El loader puede dar un error al final del tipo "Server failure" — eso es porque la verificación final hace `COUNT(*)` sobre 248k filas y Cassandra hace timeout. **Los datos SÍ se cargaron correctamente** (lo confirma con queries más simples).
+
+---
+
+# 🚀 PARTE 2 — Arrancar el proyecto día a día
+
+Cada servicio en **su propia terminal**. Mantenlas abiertas mientras trabajas.
+
+## 2.1 Backend Node (dashboards + API REST, puerto 8080)
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\backend"
+pnpm start
+```
+
+Debes ver:
+```
+✅ Cassandra conectada
+🚀 SEMAPA Backend en http://localhost:8080 (MVC Activo)
+```
+
+## 2.2 Frontend de dashboards (puerto 5173)
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\frontend"
+pnpm dev
+```
+
+URLs disponibles:
+- http://localhost:5173/contabilidad
+- http://localhost:5173/administracion
+- http://localhost:5173/operacional
+- http://localhost:5173/alcaldia
+- http://localhost:5173/consultas (las 25 consultas estratégicas)
+- http://localhost:5173/factura (generar PDF de recibo)
+
+## 2.3 Visor / Totem ciudadano (puerto 5174)
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\visor"
+pnpm dev
+```
+
+URL: http://localhost:5174
+
+## 2.4 Backend-Go (puerto 8090, opcional — solo para mobile)
+
+```powershell
+# Está dockerizado, lo levantas con:
+docker compose up -d backend-go
+
+# Verificar:
+curl http://localhost:8090/health
+```
+
+## 2.5 Mobile-app (Expo Go) — ver sección 4 para instrucciones detalladas
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\mobile-app"
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.137.1"
+pnpm start
+```
+
+---
+
+# 🛠️ PARTE 3 — Imprevistos comunes y cómo arreglarlos
+
+## 3.1 Procesos zombie ocupando puertos
+
+**Síntoma:** al hacer `pnpm start` sale `Error: listen EADDRINUSE: address already in use :::8080` o el comando termina con `[ELIFECYCLE] Command failed with exit code 1`.
+
+**Causa:** un proceso anterior quedó corriendo sin cerrarse bien.
+
+**Solución — matar el proceso del puerto:**
+
+```powershell
+# Liberar un puerto específico (ejemplo: 8080)
+Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+
+# Liberar TODOS los puertos del proyecto de una vez
+8080, 8081, 5173, 5174, 19000, 19001 | ForEach-Object {
+  $p = $_
+  Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+    "Liberado puerto $p (PID $($_.OwningProcess))"
+  }
+}
+```
+
+## 3.2 Backend Node: `NoHostAvailableError: No host could be resolved`
+
+**Síntoma:** el backend no puede conectarse a Cassandra.
+
+**Causa:** la variable `CASSANDRA_HOST` apunta a `cassandra` (hostname dentro de Docker) pero estás corriendo el backend **local** (no en Docker).
+
+**Solución:** verifica que `backend/.env` tenga:
+```
+CASSANDRA_HOST=localhost
+```
+
+## 3.3 Visor: `[ERR_PNPM_IGNORED_BUILDS] esbuild`
+
+**Síntoma:** `pnpm install` falla con "Ignored build scripts: esbuild@0.25.12".
+
+**Causa:** pnpm 11 bloquea scripts de instalación por seguridad.
+
+**Solución:**
+```powershell
+Set-Location visor
+pnpm approve-builds
+# Selecciona esbuild con espacio, Enter, y luego 'y'
+pnpm install
+```
+
+## 3.4 Mobile-app: `Unable to resolve "react-native-css-interop/jsx-runtime"`
+
+**Síntoma:** Expo Go en el celular muestra un error rojo con stack trace mencionando `react-native-css-interop`.
+
+**Causa:** NativeWind 4 inyecta este import automáticamente, pero a veces el paquete no se instala como dependencia transitiva.
+
+**Solución:**
 ```powershell
 Set-Location mobile-app
-pnpm install
-npx expo start
-
-# Escanear el QR con la app "Expo Go" en tu teléfono.
-# La app apunta a http://<IP_LAN>:8080 — configurar en mobile-app/.env si es necesario.
+pnpm add react-native-css-interop
+npx expo start --clear   # --clear limpia caché de Metro
 ```
 
----
+## 3.5 Expo: el QR muestra `exp://127.0.0.1:8081` y el celular no conecta
 
-## Flujo de modificación (cuando ya está corriendo en Docker)
+**Síntoma:** escaneas el QR pero la app no carga en el celular.
 
-### Modificaste código del backend Node (`backend/src/...`)
+**Causa:** Expo no detectó la IP de la LAN y usa `127.0.0.1` (que es la PC misma — el celular nunca llega ahí).
 
+**Solución:** forzar la IP de la LAN:
 ```powershell
-# Rebuild solo el container del backend
-docker compose up -d --build backend
-
-# Ver logs si algo falla
-docker compose logs -f backend
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.137.1"
+pnpm start
 ```
 
-### Modificaste código del backend-go (`backend-go/...`)
+> Cambia `192.168.137.1` por la IP que veas con `ipconfig` (busca "IPv4 Address" del adaptador WiFi o "Mobile Hotspot").
 
-```powershell
-docker compose up -d --build backend-go
-docker compose logs -f backend-go
-```
+## 3.6 Schema Cassandra: `cqlsh: Invalid syntax at line 1, char 1`
 
-### Modificaste el frontend (`frontend/src/...`)
+**Síntoma:** al cargar `schema.cql` con pipe (`Get-Content | docker exec -i`) sale error de sintaxis.
 
-```powershell
-# Vite HMR funciona DENTRO del container — los cambios se ven en tiempo real
-# si el container monta el código como volumen. Si no, rebuild:
-docker compose up -d --build frontend
-```
+**Causa:** el archivo tiene BOM (UTF-8 con marca de orden de bytes) que cqlsh no parsea.
 
-> **Alternativa para iteración rápida:** sacar el frontend de Docker temporalmente y correrlo local:
-> ```powershell
-> docker compose stop frontend
-> Set-Location frontend
-> pnpm install   # solo la primera vez
-> pnpm dev       # hot-reload nativo en http://localhost:5173
-> ```
-
-### Modificaste el schema Cassandra (`cassandra/schema.cql`)
-
-⚠️ Destructivo si haces `down -v`. Alternativas:
-
-```powershell
-# Opción A — preservar datos: ALTER TABLE manual
-docker exec -it semapa-cassandra cqlsh
-> USE semapa;
-> ALTER TABLE lecturas_por_medidor_mes ADD nueva_columna text;
-
-# Opción B — reset completo (perderás los datos cargados, ~7 min para repoblar)
-docker compose down -v
-# Repetir pasos 2-8 del arranque desde cero
-```
-
-### Modificaste un loader (`scripts-data/cargar_*.js`)
-
-```powershell
-# Truncar selectivamente las tablas afectadas (evita re-arrancar Cassandra)
-docker exec semapa-cassandra cqlsh -e "USE semapa; TRUNCATE consumo_mensual_por_contrato; TRUNCATE notificaciones_por_contrato; TRUNCATE lecturas_por_medidor_mes;"
-
-Set-Location scripts-data
-pnpm run cargar-csvs
-```
-
-### Reiniciar todo sin perder datos
-
-```powershell
-docker compose restart
-# o un servicio específico:
-docker compose restart backend
-```
-
-### Apagar todo (preservando datos)
-
-```powershell
-docker compose stop
-# Los volúmenes y datos se mantienen. Para retomar:
-docker compose start
-```
-
-### Apagar y borrar TODO (incluido el volumen de Cassandra)
-
-```powershell
-docker compose down -v
-```
-
----
-
-## Validar que el cálculo tarifario sigue correcto
-
-### En Cassandra (catálogo)
-
-```powershell
-docker exec semapa-cassandra cqlsh -e "SELECT alias,consumo_minimo_m3,cargo_fijo FROM semapa.catalogo_tarifas;"
-```
-
-Debe mostrar `consumo_minimo_m3 = 12` para las 9 filas y `cargo_fijo` entre 16.74 y 145.98.
-
-### En la API (cálculo real)
-
-```powershell
-# Login al backend-go (mobile API)
-$body = '{"username":"lector1","password":"lector123"}'
-$login = Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/auth/login" -ContentType "application/json" -Body $body
-$token = $login.accessToken
-
-# Calcular R3 con 25 m³ → debe devolver montoBs: 90.78
-$calc = '{"consumo_m3":25,"tarifa_alias":"R3"}'
-Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/calcular-factura" `
-  -Headers @{Authorization="Bearer $token"} -ContentType "application/json" -Body $calc
-```
-
-### En AppRegistro (mobile)
-
-1. Pestaña **Tarifas**
-2. Consumo: `25`
-3. Tarifa: `R3`
-4. Botón **Calcular factura**
-5. Debe abrir un Alert con: `Monto: Bs 90.78 · Categoría: Residencial · Exceso: 13 m³`
-
----
-
-## Troubleshooting Docker
-
-### "No host could be resolved" al conectarse a Cassandra
-
-El container `backend` espera que `cassandra` esté **healthy**, no solo "up". Si arrancan en paralelo y backend se conecta antes:
-
-```powershell
-docker compose restart backend
-```
-
-### Cassandra no arranca / loop de reinicio
-
-Cassandra 4.1 necesita ~2 GB RAM disponibles. Si Docker Desktop tiene menos:
-- Settings → Resources → aumentar Memory a 4 GB mínimo
-- Reiniciar Docker Desktop
-
-### `cqlsh: Invalid syntax at line 1, char 1`
-
-El archivo `schema.cql` está guardado con BOM (UTF-16 LE). Solución usada en este proyecto:
-
+**Solución:** copiarlo dentro del container con `docker cp`:
 ```powershell
 docker cp cassandra/schema.cql semapa-cassandra:/tmp/schema.cql
 docker exec semapa-cassandra cqlsh -f /tmp/schema.cql
 ```
 
-### `pnpm: comando no reconocido` después de instalar Corepack
+## 3.7 Cassandra `Server failure during read query`
 
-Cierra y reabre PowerShell. Si persiste, instala con la **Opción B** (standalone).
+**Síntoma:** una query a la DB devuelve `Server failure during read query at consistency LOCAL_ONE`.
 
-### El loader `cargar-csvs` falla en la verificación final con timeout
+**Causa:** la query hace scan completo de una tabla muy grande (ej. `SELECT COUNT(*) FROM lecturas_por_medidor_mes` sobre 248k filas) y Cassandra hace timeout.
 
-Es esperado: `SELECT COUNT(*) FROM lecturas_por_medidor_mes` sobre 248k filas hace timeout en Cassandra. **Los datos sí se cargaron correctamente.** Verifica con:
+**Solución:** filtrar por PK o usar índice. Por ejemplo:
+```powershell
+# ❌ MAL — scan completo
+docker exec semapa-cassandra cqlsh -e "USE semapa; SELECT * FROM lecturas_por_medidor_mes;"
+
+# ✅ BIEN — filtrar por PK (numero_serie + periodo)
+docker exec semapa-cassandra cqlsh -e "USE semapa; SELECT * FROM lecturas_por_medidor_mes WHERE numero_serie = '0E0C558E3A0F' AND periodo = '2026-03';"
+```
+
+## 3.8 Cómo cerrar correctamente cada servicio (evitar zombies futuros)
+
+| Servicio | Cierre normal |
+|---|---|
+| Backend Node | `Ctrl + C` en la terminal — esperar prompt vacío |
+| Frontend Vite | `Ctrl + C` |
+| Visor Vite | `Ctrl + C` |
+| Expo Metro | `Ctrl + C` × 2 (te pide confirmar) |
+| Cassandra | `docker compose stop cassandra` (mantiene volumen y datos) |
+
+⚠️ **NO** uses `docker compose down -v` salvo que quieras borrar TODO (incluidos los 100k contratos cargados — perderías ~8 min de carga).
+
+---
+
+# 📱 PARTE 4 — Inicializar la mobile-app (paso a paso)
+
+> ⏱️ Tardó bastante por errores de red y módulos. Esta sección documenta cada paso para que sea rápido la próxima vez.
+
+## 4.1 Pre-requisitos
+
+1. **Expo Go** instalado en el celular (Play Store / App Store)
+2. **PC y celular en la misma red WiFi** — sin esto NO funciona
+3. **Dependencias instaladas** (`pnpm install` en `mobile-app/`)
+4. **Backend Node corriendo** en puerto 8080
+
+## 4.2 Saber la IP de tu PC
 
 ```powershell
-docker exec semapa-cassandra cqlsh -e "SELECT periodo, monto_bs, estado_facturacion FROM semapa.consumo_mensual_por_contrato LIMIT 5;"
+ipconfig | findstr "IPv4"
+```
+
+Ejemplos según tu setup:
+
+| Setup | IP típica |
+|---|---|
+| Mobile Hotspot de Windows | `192.168.137.1` |
+| WiFi de casa/oficina | `192.168.0.x` o `192.168.1.x` |
+| Cable Ethernet | depende de tu router |
+
+## 4.3 Configurar `mobile-app/.env`
+
+Crea el archivo con esta única línea (cambia la IP):
+```
+EXPO_PUBLIC_API_URL=http://192.168.137.1:8080/api
+```
+
+⚠️ **NO** pegues comandos PowerShell aquí — solo la línea de la variable.
+
+## 4.4 Permitir Node.js en el firewall (una sola vez)
+
+PowerShell **como administrador**:
+```powershell
+New-NetFirewallRule -DisplayName "SEMAPA-LAN" `
+  -Direction Inbound `
+  -LocalPort 8080,8081 `
+  -Protocol TCP -Action Allow -Profile Any
+```
+
+## 4.5 Activar hotspot (si lo usas)
+
+Configuración de Windows → Red → **Mobile Hotspot → On**. Conecta tu celular a esa red WiFi creada.
+
+## 4.6 Arrancar el backend Node (terminal 1)
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\backend"
+pnpm start
+```
+
+Espera ver: `🚀 SEMAPA Backend en http://localhost:8080`.
+
+## 4.7 Test rápido desde el celular ANTES de Expo
+
+Antes de arrancar Expo, **verifica que el celu vea a la PC**. En el navegador del celu abre:
+```
+http://192.168.137.1:8080/api/mvc/contabilidad/facturacion-mensual
+```
+
+| Resultado | Acción |
+|---|---|
+| ✅ Ves JSON con datos | Tu red está OK, sigue al paso 4.8 |
+| ❌ No conecta | Revisa: hotspot activo, IP correcta, firewall, celu conectado al hotspot |
+
+## 4.8 Arrancar Expo (terminal 2)
+
+```powershell
+Set-Location "d:\P5\Proyecto5P\PRACTICA_5_DISTRBUIDOS\mobile-app"
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.137.1"
+pnpm start
+```
+
+**Verifica que el QR muestre la IP correcta**, no `127.0.0.1`:
+```
+› Metro waiting on exp://192.168.137.1:8081
+```
+
+Si dice `127.0.0.1`, salta a la sección 3.5.
+
+## 4.9 Conectar el celular
+
+1. Abre **Expo Go** en el celular
+2. Toca "Scan QR code"
+3. Escanea el QR de la terminal
+4. La app se descarga (~30 seg primera vez) y abre
+
+## 4.10 Login y probar registro de lectura
+
+Credenciales de prueba:
+- Usuario: `lector1`
+- Contraseña: `lector123`
+
+Una vez dentro:
+1. Pestaña **"Registro"**
+2. Campo MAC — escribe `0E:0C:55:8E:3A:0F` (formato automático con la máscara)
+3. Toca "Buscar medidor"
+4. Aparece **lectura anterior real**
+5. Ingresa lectura actual mayor (ej. si anterior es `1862`, pon `1900`)
+6. Toca "Guardar lectura"
+
+## 4.11 Verificar que se guardó en Cassandra
+
+Desde PowerShell:
+```powershell
+docker exec semapa-cassandra cqlsh -e "USE semapa; SELECT fecha_hora, lectura_actual_m3, origen FROM lecturas_por_medidor_mes WHERE numero_serie = '0E0C558E3A0F' AND periodo = '2026-05';"
+```
+
+Debe aparecer una fila reciente con `origen = app_movil` ✅.
+
+---
+
+# 🧩 PARTE 5 — Funcionalidad implementada por componente
+
+## 5.1 Cassandra (schema)
+
+**Archivo:** [cassandra/schema.cql](cassandra/schema.cql)
+
+### Tablas (25 totales)
+- **Catálogos (7):** distritos, zonas, tarifas, modelos de medidor, errores IoT, gateways, tipos de infraestructura
+- **Operativas (4):** usuarios, contratos, infraestructura, infraestructura por zona
+- **Medidores (4):** por serie, por MAC, por distrito-zona, por radiobase-zona
+- **Lecturas (4):** por medidor-mes, por distrito-hora, consumo mensual, consumo por distrito-tarifa
+- **Errores (2):** por modelo-mes, por distrito-zona
+- **Dashboards (3):** resumen operacional, top consumidores, ingresos por tarifa
+- **Notificaciones (1):** notificaciones por contrato
+
+### Cambios introducidos
+- **Columna `origen`** en `lecturas_por_medidor_mes` (`iot` / `app_movil` / `manual`)
+- **Columnas `lectura_anterior_m3` y `lectura_actual_m3`** en `lecturas_por_medidor_mes` (para registrar la lectura real del medidor, no solo el consumo)
+- **Columnas `fecha_emision`, `fecha_vencimiento`, `fecha_pago`, `dias_atraso`** en `consumo_mensual_por_contrato` (cartera vencida real, sin mock)
+- **Columna `tipo`** en `notificaciones_por_contrato` (`preaviso` / `aviso_cobranza`)
+- **Índice secundario** `contratos_por_ci_idx` sobre `contratos_por_numero(identificador_titular)` — habilita búsqueda por CI sin scan completo
+
+## 5.2 Backend Node (puerto 8080) — el principal
+
+**Carpeta:** [backend/](backend/)
+
+### Controllers modificados / creados
+
+| Controller | Funcionalidad |
+|---|---|
+| `contabilidadController.js` | Cartera vencida real (sin mock hash) usando `estado_facturacion` y `dias_atraso`. Endpoint `getPreavisos` nuevo. Aviso de cobranza envía email real con PDF adjunto |
+| `administracionController.js` | Endpoint `getLecturasApp` que cuenta lecturas con `origen='app_movil'` para el KPI Obligatorio del D2 |
+| `consultasController.js` | **Las 25 consultas del PDF** implementadas como funciones `q1..q25` + dispatcher `GET /api/consultas/:id` |
+| `visorController.js` | Búsqueda multi-formato (contrato/CI/MAC) + normalización de prefijos + endpoint `pagar` para marcar facturas como pagadas |
+| `mobile/lecturasController.js` | `POST /api/lecturas` inserta con `origen='app_movil'`, `lectura_actual_m3`, `lectura_anterior_m3`. Acepta MAC con o sin `:` |
+| `mobile/medidoresController.js` | `GET /api/medidores/:codigo` busca la última lectura real del medidor across periodos para devolver `lecturaAnterior` correcta a la app |
+
+### Email + PDF
+
+- **email.js** refactorizado: lee credenciales SMTP de `.env`, exporta `enviarPreavisoCobranza()` con HTML rojo de urgencia
+- **pdf.js** ampliado: nueva función `generarAvisoCobranzaPDF()` con formato similar al recibo oficial SEMAPA — datos del titular, historial 6 meses, conceptos (Agua/Alcantarillado/Rep. Formulario), importe en letras, fecha de vencimiento, observación
+- El email del aviso de cobranza adjunta automáticamente el PDF generado
+
+## 5.3 Backend Go (puerto 8090) — API móvil
+
+**Carpeta:** [backend-go/](backend-go/)
+
+### Cambios
+
+- **Función `normalizeMedidorCodigo`** acepta MAC con o sin `:` (XX:XX:XX:XX:XX:XX o XXXXXXXXXXXX)
+- **`POST /api/lecturas`** inserta con:
+  - `origen = 'app_movil'`
+  - `lectura_actual_m3` y `lectura_anterior_m3` (campos reales del medidor)
+  - Calcula `consumo_m3 = lectura_actual - lectura_anterior`
+- **`GET /api/medidores/:codigo`** prioriza `lectura_actual_m3` sobre `lectura_m3` para mostrar la lectura real del medidor en la app
+
+## 5.4 Frontend dashboards (puerto 5173)
+
+**Carpeta:** [frontend/](frontend/)
+
+### 6 páginas
+
+| Página | Estado |
+|---|---|
+| **ContabilidadPage** | Cartera vencida con datos reales + nueva sección de **Preavisos emitidos** (KPIs + BarChart por canal) + aviso de cobranza con prompt de email destino |
+| **AdministracionPage** | **KPI nuevo "Lecturas registradas vía app móvil"** + BarChart por distrito + empty state |
+| **OperacionalPage** | KPIs de consumo, medidores activos, top 10 zonas (cumple obligatorios del D2) |
+| **AlcaldiaPage** | Vista Smart City con KPIs y mapa GeoJSON de distritos |
+| **ConsultasPage** | **Las 25 consultas** del PDF — clickeas y se ejecutan. Filtros de período y distrito |
+| **FacturaPage** | Generación de PDF de recibo + envío por email |
+
+## 5.5 Visor / Totem ciudadano (puerto 5174)
+
+**Carpeta:** [visor/](visor/)
+
+### Funcionalidad
+
+- **Pantalla bienvenida** con botón "Consultar mi cuenta"
+- **Buscador** con teclado numérico en pantalla — acepta formatos:
+  - Número de contrato `CONT-XX-XXXXXX` o `CT-XXXXXXXX` o solo dígitos
+  - **CI** del titular (con o sin sufijo de departamento)
+  - **MAC** del medidor (con o sin `:`)
+- **Pantalla de datos** muestra cliente + historial 6 meses con estado de cada factura
+- **Opciones de pago:**
+  - Enviar comprobante por email (teclado QWERTY en pantalla)
+  - Imprimir en rollo térmico 55 mm
+- **Pantalla de éxito** con countdown y reinicio automático
+
+### Endpoint backend nuevo
+
+- **`POST /api/visor/pagar`** marca facturas como pagadas: actualiza `estado_facturacion = 'pagado'`, `fecha_pago = now()`, `dias_atraso = 0`
+
+## 5.6 Mobile-app — AppRegistro (Expo Go)
+
+**Carpeta:** [mobile-app/](mobile-app/)
+
+### Funcionalidad (Entregable 4 del PDF — Obligatorio)
+
+- **Login** con `lector1` / `lector123`
+- **Pestaña Registro** ([app/(tabs)/registro.tsx](mobile-app/app/(tabs)/registro.tsx)):
+  - Input MAC con **máscara automática** `XX:XX:XX:XX:XX:XX`
+  - Búsqueda del medidor → muestra modelo, distrito, zona, tarifa y **lectura anterior real**
+  - Input lectura actual (solo números enteros, regex `[^0-9]/g`)
+  - **Validación delta** — la lectura nueva debe ser mayor o igual a la anterior
+  - GPS opcional (lat/lon del registro)
+  - **Modo offline** — si no hay conexión, encola y sincroniza después
+  - POST a `/api/lecturas` con `origen='app_movil'`, `lectura_actual_m3`, `lectura_anterior_m3`
+
+## 5.7 Scripts-data — carga de datos
+
+**Carpeta:** [scripts-data/](scripts-data/)
+
+| Script | Para qué |
+|---|---|
+| **cargar_catalogos.js** | Carga los CSVs pequeños (distritos, tarifas, modelos, errores IoT, gateways) → tablas catálogo |
+| **cargar_csvs.js** | **Loader principal** — procesa los 4 CSVs grandes (`contratos_agua`, `infraestructuras_cochabamba`, `medidores_iot`, `lecturas_iot`), cruza por `numero_catastro` y `medidor_iot`, calcula `estado_facturacion` real desde `fecha_pago`, genera preavisos |
+| **arreglar_errores.js** | Utility — repuebla solo las 2 tablas de errores con distribución correcta entre 5 modelos × 3 períodos × 3 códigos (sin tocar lecturas) |
+| **generar_datos.js** | Loader viejo con Faker — mantenido como referencia histórica, NO se usa |
+
+### Comandos del package.json
+
+```json
+{
+  "cargar-catalogos": "node cargar_catalogos.js",
+  "cargar-csvs": "node cargar_csvs.js",
+  "cargar-real": "node cargar_catalogos.js && node cargar_csvs.js",
+  "generar-datos": "node generar_datos.js"
+}
+```
+
+## 5.8 Documentos de defensa
+
+| Archivo | Contenido |
+|---|---|
+| [CONSULTAS.md](CONSULTAS.md) | Las 25 consultas con CQL crudo + guion narrativo para las preguntas estratégicas de los 3 dashboards |
+| [CONSULTAS_DOCKER.md](CONSULTAS_DOCKER.md) | Las 25 consultas como comandos `docker exec` listos para copiar/pegar en PowerShell |
+| [DocP/HISTORIAL.md](DocP/HISTORIAL.md) | Historial completo de sesiones — para que un asistente IA futuro entienda el contexto |
+
+---
+
+# 📋 PARTE 6 — Datos cargados (resumen)
+
+Después del `pnpm run cargar-csvs`:
+
+| Tabla | Filas | Origen |
+|---|---|---|
+| `usuarios_por_identificador` | 68.856 | CSV (CI únicos) |
+| `contratos_por_numero` | 100.000 | `contratos_agua.csv` |
+| `infraestructura_por_id` | 57.356 | `infraestructuras_cochabamba.csv` (filtrado con contrato) |
+| `medidores_por_serie` | 100.000 | `medidores_iot.csv` (filtrado con contrato) |
+| `lecturas_por_medidor_mes` | 248.055 | `lecturas_iot.csv` |
+| `consumo_mensual_por_contrato` | 128.653 | agregado por (contrato, período) |
+| `notificaciones_por_contrato` | 1.472 | preavisos generados para vencidos |
+| `errores_por_modelo_mes` | 45 | 5 modelos × 3 períodos × 3 códigos |
+| `errores_por_distrito_zona` | ~1.110 | distribuido por distritos y zonas |
+
+### Distribución de estados de facturación
+- **103.112** pagados (a tiempo)
+- **24.069** pagados atrasados (después del vencimiento)
+- **1.472** vencidos (no pagaron — concentrados en período 2026-02)
+- **0** pendientes (los demás ya pasaron su plazo de 20 días)
+
+---
+
+# 🚦 PARTE 7 — Checklist completo (orden de pasos primera vez)
+
+```
+[ ] 1. Instalar Docker Desktop
+[ ] 2. Instalar Node.js 20+
+[ ] 3. corepack enable + activar pnpm
+[ ] 4. Clonar el repo
+[ ] 5. pnpm install en cada subproyecto (backend, frontend, visor, scripts-data, mobile-app)
+[ ] 6. pnpm approve-builds en visor/ (para esbuild)
+[ ] 7. Crear backend/.env con SMTP_USER, SMTP_PASS, CASSANDRA_HOST=localhost
+[ ] 8. Crear mobile-app/.env con EXPO_PUBLIC_API_URL=http://<TU_IP>:8080/api
+[ ] 9. docker compose up -d cassandra (esperar healthy)
+[ ] 10. docker cp schema.cql + docker exec cqlsh -f /tmp/schema.cql
+[ ] 11. pnpm run cargar-catalogos (en scripts-data)
+[ ] 12. pnpm run cargar-csvs (en scripts-data, ~7 min)
+[ ] 13. pnpm start (en backend) → http://localhost:8080
+[ ] 14. pnpm dev (en frontend) → http://localhost:5173
+[ ] 15. pnpm dev (en visor) → http://localhost:5174
+[ ] 16. pnpm start con REACT_NATIVE_PACKAGER_HOSTNAME (en mobile-app)
+[ ] 17. Escanear QR con Expo Go en el celular
+[ ] 18. Login lector1 / lector123 + probar registro de lectura
+[ ] 19. Verificar lectura en Cassandra con cqlsh
 ```
 
 ---
 
-## Pendientes / observaciones
+---
 
-Estos puntos quedaron identificados pero NO se tocaron en esta tanda. Si en algún momento alguien los quiere abordar:
+# 📜 Anexo histórico — Correcciones de cálculo tarifario (rama devLucas, 2026-05-19)
 
-- **Backend Go (`:8090`)** sigue sin el endpoint `/api/lorawan/simular-batch` que sí invoca `mobile-app/src/api/endpoints.ts:60`. Si la app apunta a Go, ese botón falla.
-- **Backend Go `Refresh`** ([handlers.go:55-64](backend-go/internal/handlers/handlers.go#L55-L64)) es un placeholder que devuelve el mismo token sin validar JWT.
-- **Categoría M (Mixto)** del Art.4 del reglamento no existe en `catalogo_tarifas` ni en el CSV.
-- **Alcantarillado** no está implementado como línea separada en la factura (Art.6 menciona Bs 17 / 31.5 / 45 m³ / etc. por categoría).
-- **Descuento 40% por pago al contado** (Art.27 del reglamento) no implementado.
-- **Factor K** para descarga industrial de curtiembres/jeans/lavanderías (Cap. VIII-IX) no implementado.
-- **`mobile-app/.env`** — recordatorio: NO subir al repo; solo va `.env.example`.
+> Sección conservada del readme original. Documenta los bugs de cálculo de tarifa que se corrigieron antes del trabajo actual.
+
+## Resumen del anexo
+
+Se corrigieron bugs críticos en el cálculo del cobro de SEMAPA que afectaban tanto al backend como a AppRegistro, y se aplicó la regla de 300 litros por habitante/día en el generador de datos. También se unificó la URL de la API en la app móvil para evitar inconsistencias entre archivos de configuración.
+
+## Bugs corregidos
+
+### Bug 1 — Mapeo incorrecto del CSV Tarifario
+El CSV `Recursos/Recursos Practica 5 - Tarifario.csv` tiene dos columnas redundantes. El código viejo tomaba el monto total como m³ y el precio unitario como cargo fijo. Corregido a: `consumo_minimo = 12` fijo, `cargo_fijo = row[2]` (el monto real).
+
+### Bug 2 — Cálculo agregado mensual ignoraba bloques progresivos
+El cálculo del `monto_bs` aplicaba el precio del bloque 26-50 a TODO el exceso. Corregido para usar `calcularMontoPorConsumo()` del backend que respeta los bloques 13-25, 26-50, 51-75, 76-100, 101-150 y 151+.
+
+### Bug 3 — Lecturas con valores arbitrarios
+El loop usaba `randomFloat(0, 1300)` sin relación con la categoría. Corregido aplicando la regla SEMAPA: 300 L × habitantes_típicos por categoría (R1=1, R2=2, R3=4, R4=5 personas).
+
+### Bug 4 — URL móvil inconsistente
+`mobile-app/app.json` apuntaba a `:8090`, `.env.example` a `:8080`, `api.ts` a `:8080`. Unificado todo a `:8080` (Node).
+
+## Casos de verificación (post-fix)
+
+| Tarifa | Consumo (m³) | Cálculo | Monto |
+|---|---|---|---|
+| R1 | 10 (≤12) | solo cargo fijo | Bs 16.74 |
+| R3 | 25 | 62.57 + 13 × 2.17 | Bs 90.78 |
+| R4 | 60 | 104.22 + 13×2.58 + 25×2.80 + 10×4.39 | Bs 251.66 |
+
+Para validar en cqlsh:
+```powershell
+docker exec semapa-cassandra cqlsh -e "SELECT alias,consumo_minimo_m3,cargo_fijo FROM semapa.catalogo_tarifas;"
+```
+Debe mostrar `consumo_minimo_m3 = 12` para las 9 filas y `cargo_fijo` entre 16.74 y 145.98.
+
+## Archivos modificados en esa tanda
+
+| Archivo | Cambio |
+|---|---|
+| `scripts-data/cargar_catalogos.js` | Bugfix mapeo CSV de tarifas |
+| `scripts-data/generar_datos.js` | Regla 300 L + cálculo monto correcto (loader viejo, hoy reemplazado por `cargar_csvs.js`) |
+| `mobile-app/app.json` | URL API unificada a 8080 |
+| `mobile-app/src/config/api.ts` | Comentario aclaratorio |
 
 ---
 
-## Archivos modificados (resumen rápido)
-
-| Archivo | Líneas | Tipo de cambio |
-|---|---|---|
-| `scripts-data/cargar_catalogos.js` | ~154-156 | Bugfix mapeo CSV |
-| `scripts-data/generar_datos.js` | ~7, ~14, ~196-216, ~225, ~295 | Regla 300 L + cálculo monto correcto |
-| `mobile-app/app.json` | 33 | URL API unificada (8080) |
-| `mobile-app/src/config/api.ts` | 3-5 | Comentario aclaratorio |
-
----
-
-*Cualquier duda sobre la lógica de tarifa, ver el trace explicativo en este mismo readme (sección "Bug 1") o consultar el `Reglamento Interno de Política Tarifaria SEMAPA` (PDF en la raíz del repo).*
-
----
-
-## por si Vite molesta 
-Si te aparece otro error después
-Es probable que aparezcan más dependencias faltantes (el package.json del frontend está bastante incompleto — usa recharts, react-leaflet, etc., y esos también necesitan tener React peer-installado pero ya lo tendrás).
-
-Si Vite se queja de algo más tipo "Cannot find module 'X'", el patrón es el mismo:
-
-
-pnpm add X
+*Última actualización del informe: 2026-05-26 — Devon. Cualquier duda sobre componentes específicos: revisar `DocP/HISTORIAL.md` para el contexto histórico completo.*

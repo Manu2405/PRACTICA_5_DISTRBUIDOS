@@ -1,0 +1,30 @@
+# ============================================================
+# Override de docker-compose para modo CLÚSTER (2 nodos en 2 laptops)
+# ============================================================
+# Uso (en CADA laptop):
+#   docker compose -f docker-compose.yml -f docker-compose.cluster.yml up -d cassandra
+#
+# Requiere variables en .env.cluster (copiar de .env.cluster.example):
+#   NODE_IP=192.168.137.1   # IP de ESTA laptop en el hotspot
+#   CASSANDRA_SEEDS=192.168.137.1  # IP de la laptop semilla (siempre la A)
+# ============================================================
+
+services:
+  cassandra:
+    # network_mode: host hace que Cassandra escuche en la IP real del hotspot
+    # (no en la IP interna de Docker), que es lo que la otra laptop necesita ver.
+    # Con host networking, Cassandra usa directamente los puertos del host:
+    # 7000 (gossip entre nodos), 7199 (JMX), 9042 (CQL clientes).
+    # Docker imprimirá un warning sobre el `ports` heredado del docker-compose.yml
+    # base — es inofensivo, los puertos se siguen exponiendo via host network.
+    network_mode: host
+    environment:
+      - CASSANDRA_CLUSTER_NAME=SemapaCluster
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_SEEDS=${CASSANDRA_SEEDS}
+      - CASSANDRA_LISTEN_ADDRESS=${NODE_IP}
+      - CASSANDRA_BROADCAST_ADDRESS=${NODE_IP}
+      - CASSANDRA_RPC_ADDRESS=0.0.0.0
+      - CASSANDRA_BROADCAST_RPC_ADDRESS=${NODE_IP}

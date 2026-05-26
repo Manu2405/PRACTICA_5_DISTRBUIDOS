@@ -1,7 +1,7 @@
 import cassandra from 'cassandra-driver';
 const CASS_HOST = process.env.CASSANDRA_HOST || 'cassandra';
 const client = new cassandra.Client({
-  contactPoints: [CASS_HOST],
+  contactPoints: CASS_HOST.split(',').map(s => s.trim()).filter(Boolean),
   localDataCenter: 'datacenter1',
   keyspace: 'semapa',
   protocolOptions: { port: 9042 },

@@ -4,10 +4,13 @@
 -- ============================================================
 
 -- 1. KEYSPACE
+-- NetworkTopologyStrategy + RF=2 = cada fila vive en los 2 nodos del clúster.
+-- Si una laptop se cae, los datos siguen disponibles desde la otra (HA).
+-- Para single-node sigue funcionando: Cassandra solo crea las réplicas que puede.
 CREATE KEYSPACE IF NOT EXISTS semapa
 WITH replication = {
-  'class': 'SimpleStrategy',
-  'replication_factor': 1
+  'class': 'NetworkTopologyStrategy',
+  'datacenter1': 2
 };
 
 USE semapa;
@@ -121,6 +124,9 @@ CREATE TABLE IF NOT EXISTS contratos_por_numero (
   estado text,
   fecha_alta date
 );
+
+-- Índice secundario para búsqueda por CI desde el visor (totem ciudadano)
+CREATE INDEX IF NOT EXISTS contratos_por_ci_idx ON contratos_por_numero (identificador_titular);
 
 -- 3.3 Infraestructuras por zona
 CREATE TABLE IF NOT EXISTS infraestructuras_por_zona (

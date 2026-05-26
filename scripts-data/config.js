@@ -9,7 +9,7 @@ const CASSANDRA_KEYSPACE = process.env.CASSANDRA_KEYSPACE || 'semapa';
 
 export function createClient(useKeyspace = true) {
   const opts = {
-    contactPoints: [CASSANDRA_HOST],
+    contactPoints: CASSANDRA_HOST.split(',').map(s => s.trim()).filter(Boolean),
     localDataCenter: 'datacenter1',
     protocolOptions: { port: CASSANDRA_PORT },
   };
