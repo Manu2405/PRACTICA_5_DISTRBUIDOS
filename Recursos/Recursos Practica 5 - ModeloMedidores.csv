@@ -1,0 +1,6 @@
+TipoMedidorID,Marca / Fabricante,Modelo / Referencia,TipoConectividad,Aplicación / Industria,Datasheet / Especificaciones
+1,Khomp,ITC 100,LoRa,Agua y gas (residencial e industrial),Khomp ITC 100
+2,Sagemcom,Siconia WATER WM-NB,NB-IoT,Redes de distribución de agua,Sagemcom Siconia Datasheet
+3,B Meters / Arcobel,OY1320 LoRaWAN,LoRaWAN,Integración con medidores mecánicos GMDM-RFM,OY1320 Datasheet
+4,EDMI,WP20,NB-IoT,Uso residencial y servicios públicos,EDMI WP20 Datasheet
+5,LAIN Holdings,Medidor 100% IoT,No especificado,Agua potable (residencial y comercial),LAIN Holdings Medidor IoT

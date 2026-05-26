@@ -1,0 +1,17 @@
+{
+  "name": "semapa-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "start:nodotenv": "node server.js"
+  },
+  "dependencies": {
+    "cassandra-driver": "^4.7.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^8.0.7",
+    "pdfkit": "^0.15.0"
+  }
+}

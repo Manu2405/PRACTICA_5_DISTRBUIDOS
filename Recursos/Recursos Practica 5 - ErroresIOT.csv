@@ -1,0 +1,10 @@
+Error,Descripcion,.,.,GeteWayId,Name,Location
+1,Automatico (Bien),.,.,1,LoRaWan-Teleferico,"17°23'21.2""S 66°08'30.2""W"
+2,Manual,.,.,2,LoRaWan-ParqueVial,"17°22'51.6""S 66°09'12.1""W"
+3,Falla en la alimentación eléctrica,.,.,3,LoRaWan-ParqueLincon,"17°22'11.5""S 66°10'35.0""W"
+4,Fallo en la conectividad de red,.,.,4,LoRaWan-Petrolera,"17°26'38.7""S 66°08'26.5""W"
+5,Configuración incorrecta del sensor o gateway,.,.,.,.,.
+6,Obstrucción o daño en el caudalímetro,.,.,.,.,.
+7,Problemas de firmware o software embebido,.,.,.,.,.
+8,Error en el backend o plataforma IoT,.,.,.,.,.
+9,Desincronización de reloj (timestamp incorrecto),.,.,.,.,.

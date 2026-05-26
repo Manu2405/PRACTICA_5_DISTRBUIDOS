@@ -1,21 +1,15 @@
-# syntax=docker/dockerfile:1
+FROM node:20-alpine
 
-FROM golang:1.22-alpine AS build
-WORKDIR /src
+RUN corepack enable && corepack prepare pnpm@9 --activate
 
-RUN apk add --no-cache ca-certificates git
+WORKDIR /app
+COPY package.json ./
+RUN pnpm install --prod
 
-COPY go.mod ./
-COPY app ./app
+COPY . .
 
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./app
+RUN mkdir -p recibos/media_carta recibos/rollo_termico
 
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates \
-  && adduser -D -H -s /sbin/nologin appuser
-USER appuser
-WORKDIR /home/appuser
-COPY --from=build /out/api /usr/local/bin/api
-ENV PORT=8000
-EXPOSE 8000
-ENTRYPOINT ["/usr/local/bin/api"]
+EXPOSE 8080
+
+CMD ["node", "server.js"]

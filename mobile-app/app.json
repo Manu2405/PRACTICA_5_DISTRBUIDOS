@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "AppRegistro SEMAPA",
+    "slug": "app-registro-semapa",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "appregistro",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B3D5C"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "bo.gob.semapa.appregistro"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B3D5C"
+      },
+      "package": "bo.gob.semapa.appregistro"
+    },
+    "plugins": ["expo-router", "expo-location"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": { "origin": false },
+      "apiUrl": "http://192.168.1.100:8080/api"
+    }
+  }
+}

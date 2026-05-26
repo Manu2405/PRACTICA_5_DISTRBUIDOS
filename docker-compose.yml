@@ -1,73 +1,77 @@
 services:
   cassandra:
     image: cassandra:4.1
+    container_name: semapa-cassandra
     ports:
       - "9042:9042"
     environment:
-      CASSANDRA_CLUSTER_NAME: semapa
-      MAX_HEAP_SIZE: 512M
-      HEAP_NEWSIZE: 128M
-    healthcheck:
-      test: ["CMD-SHELL", "cqlsh -e 'DESC KEYSPACES' || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 30
-      start_period: 60s
-
-  cassandra-init:
-    image: cassandra:4.1
-    depends_on:
-      cassandra:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - "exec cqlsh cassandra -e \"CREATE KEYSPACE IF NOT EXISTS ${CASSANDRA_KEYSPACE:-semapa} WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};\""
-    restart: "no"
-
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio12345}
+      - CASSANDRA_CLUSTER_NAME=SemapaCluster
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
     volumes:
-      - minio_data:/data
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
 
   backend:
     build:
       context: ./backend
-    ports:
-      - "8000:8000"
+      dockerfile: Dockerfile
+    container_name: semapa-backend
+    network_mode: host
     environment:
-      PORT: "8000"
-      GIN_MODE: ${GIN_MODE:-release}
-      CASSANDRA_CONTACT_POINTS: ${CASSANDRA_CONTACT_POINTS:-cassandra}
-      CASSANDRA_KEYSPACE: ${CASSANDRA_KEYSPACE:-semapa}
-      CASSANDRA_PORT: ${CASSANDRA_PORT:-9042}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio12345}
-      MINIO_BUCKET: ${MINIO_BUCKET:-semapa}
+      - CASSANDRA_HOST=localhost
     depends_on:
       cassandra:
         condition: service_healthy
-      cassandra-init:
-        condition: service_completed_successfully
-      minio:
-        condition: service_started
+    volumes:
+      - ./backend/recibos:/app/recibos
+    restart: unless-stopped
+
+  # API Go para AppRegistro (Expo Go) — puerto 8090
+  backend-go:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    container_name: semapa-backend-go
+    ports:
+      - "8090:8090"
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - CASSANDRA_KEYSPACE=semapa
+      - APP_PORT=8090
+      - JWT_SECRET=semapa-dev-secret
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_API_BASE_URL: ""
+      dockerfile: Dockerfile
+    container_name: semapa-frontend
     ports:
-      - "5173:80"
+      - "5173:5173"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  visor:
+    build:
+      context: ./visor
+      dockerfile: Dockerfile
+    container_name: semapa-visor
+    ports:
+      - "5174:5174"
+    depends_on:
+      - backend
+    restart: unless-stopped
 
 volumes:
-  minio_data: {}
+  cassandra_data:

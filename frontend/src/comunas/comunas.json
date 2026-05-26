@@ -1,0 +1,110 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Adela Zamudio",
+        "distritos": [
+          10,
+          11,
+          12
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.1639081639848,
+          -17.3721159580567
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Itocta",
+        "distritos": [
+          9,
+          15
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.17670172667144,
+          -17.450020841698198
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Tunari",
+        "distritos": [
+          13,
+          2,
+          1
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.13972265733081,
+          -17.334438186676607
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Valle Hermoso",
+        "distritos": [
+          6,
+          7,
+          14
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.136708,
+          -17.40811
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Molle",
+        "distritos": [
+          3,
+          4
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.196501,
+          -17.390478
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "comuna": "Alejo Calatayud",
+        "distritos": [
+          5,
+          8
+        ]
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.1497526007537,
+          -17.431465834710345
+        ]
+      }
+    }
+  ]
+}

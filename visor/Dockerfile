@@ -1,0 +1,13 @@
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+WORKDIR /app
+COPY package.json ./
+RUN pnpm install
+
+COPY . .
+
+EXPOSE 5174
+
+CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]

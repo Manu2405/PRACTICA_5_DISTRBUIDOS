@@ -1,0 +1,39 @@
+,,,
+,03-07-012-0456-000,,
+,Segmento,Significado,
+,3,Distrito municipal,
+,7,Zona o subdistrito,
+,12,Manzano,
+,456,Lote o predio,
+,0,"Subdivisión / unidad (si aplica, por ejemplo departamentos)",
+,,,
+,,,
+,,,
+,Identificación del predio,,
+,,Campo,Ejemplo
+,,Número catastral,03-07-012-0456-000
+,,Código predial interno,PRED-2026-001254
+,,Distrito municipal,Distrito 3
+,,Zona / OTB / Urbanización,Ticti Norte
+,,Manzano,12
+,,Lote,8
+,,Dirección del inmueble,Av. América Oeste N° 1234
+,,Tipo de predio,Urbano / Rural
+,,Uso del suelo,"Vivienda, Comercial, Industrial, Mixto"
+,Datos del propietario o contribuyente,,
+,,Campo,Ejemplo
+,,Nombre completo,Ricardo Mendoza Pérez
+,,CI / NIT,5678901 CBBA
+,,Copropietarios,Sí/No
+,,Teléfono,70707070
+,,Correo electrónico,ejemplo@correo.com
+,,Domicilio fiscal,Calle XYZ
+,Datos físicos del terreno,,
+,,Superficie del terreno (m²),500
+,,Frente (m),20
+,,Fondo (m),25
+,,Forma del lote,Regular
+,,Topografía,Plana
+,,Servicios básicos,"Agua, luz, alcantarillado"
+,,Coordenadas geográficas,Lat/Long
+,,Colindancias,"Norte, Sur, Este, Oeste"
