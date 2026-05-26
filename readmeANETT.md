@@ -2,7 +2,7 @@
 > Documento de trabajo interno — actualizado 2026-05-14
 
 ---
-
+## cambios
 ## 🗂️ TAREAS TRELLO
 
 ### Tablero: SEMAPA · Práctica 5
