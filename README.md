@@ -1,6 +1,6 @@
 # 💧 SEMAPA — Sistema de Gestión Inteligente de Agua Potable
 
-Sistema integral de monitoreo, facturación y notificación para el Servicio Municipal de Agua Potable y Alcantarillado de Cochabamba, Bolivia.
+Sistema integral de monitoreo, facturación y notificación para el Servicio Municipal de Agua Potable y Alcantarillado de Cochabamba, Bolivia
 
 > **Práctica 5 — Implementación de Cassandra**  
 > Base de Datos Avanzadas · UMSS 2026
