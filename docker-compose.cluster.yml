@@ -2,29 +2,39 @@
 # Override de docker-compose para modo CLÚSTER (2 nodos en 2 laptops)
 # ============================================================
 # Uso (en CADA laptop):
-#   docker compose -f docker-compose.yml -f docker-compose.cluster.yml up -d cassandra
+#   docker compose --env-file .env.cluster -f docker-compose.yml -f docker-compose.cluster.yml up -d cassandra
 #
 # Requiere variables en .env.cluster (copiar de .env.cluster.example):
-#   NODE_IP=192.168.137.1   # IP de ESTA laptop en el hotspot
+#   NODE_IP=192.168.137.1          # IP de ESTA laptop en el hotspot
 #   CASSANDRA_SEEDS=192.168.137.1  # IP de la laptop semilla (siempre la A)
+# ============================================================
+# Por qué NO usamos network_mode: host:
+# En Docker Desktop para Windows, el contenedor corre dentro de una VM Linux
+# (WSL2), y network_mode: host expone la red de la VM, NO la red de Windows.
+# Eso hace que Cassandra falle al hacer bind a 192.168.137.1.
+# La solución universal (Windows + Linux): port forwarding + broadcast_address.
 # ============================================================
 
 services:
   cassandra:
-    # network_mode: host hace que Cassandra escuche en la IP real del hotspot
-    # (no en la IP interna de Docker), que es lo que la otra laptop necesita ver.
-    # Con host networking, Cassandra usa directamente los puertos del host:
-    # 7000 (gossip entre nodos), 7199 (JMX), 9042 (CQL clientes).
-    # Docker imprimirá un warning sobre el `ports` heredado del docker-compose.yml
-    # base — es inofensivo, los puertos se siguen exponiendo via host network.
-    network_mode: host
+    # Puertos del clúster (9042 ya está en el docker-compose.yml base).
+    # 7000 = gossip entre nodos (lo que necesita la otra laptop)
+    ports:
+      - "7000:7000"
     environment:
       - CASSANDRA_CLUSTER_NAME=SemapaCluster
       - CASSANDRA_DC=datacenter1
       - CASSANDRA_RACK=rack1
       - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
       - CASSANDRA_SEEDS=${CASSANDRA_SEEDS}
-      - CASSANDRA_LISTEN_ADDRESS=${NODE_IP}
+      # listen_address = "auto" → Cassandra usa la IP del bridge interno del
+      # contenedor (algo como 172.17.0.2). Es donde realmente escucha.
+      - CASSANDRA_LISTEN_ADDRESS=auto
+      # broadcast_address = la IP que se anuncia a OTROS nodos del clúster.
+      # Es la IP del hotspot de esta laptop, la que la otra laptop puede ver.
       - CASSANDRA_BROADCAST_ADDRESS=${NODE_IP}
+      # rpc_address = 0.0.0.0 → acepta clientes CQL desde cualquier interfaz
       - CASSANDRA_RPC_ADDRESS=0.0.0.0
+      # broadcast_rpc_address = lo que se le dice a los clientes (driver) para
+      # conectarse. Apunta a la IP del hotspot.
       - CASSANDRA_BROADCAST_RPC_ADDRESS=${NODE_IP}
